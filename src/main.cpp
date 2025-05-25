@@ -1,6 +1,7 @@
 // main.ino o main.cpp
 #include <Arduino.h>
-#include "SingleMotor.h"
+#include "Motor_Control.h"
+#include <Arduino_FreeRTOS.h>
 
 // Pines de los motores
 #define L_PWM1 5
@@ -14,8 +15,8 @@
 #define R_ENC_B 23
 
 // Instancias de motores
-SingleMotor motorIzq(L_PWM1, L_PWM2, L_ENC_A, L_ENC_B);
-SingleMotor motorDer(R_PWM1, R_PWM2, R_ENC_A, R_ENC_B);
+Motor_Control motorIzq(L_PWM1, L_PWM2, L_ENC_A, L_ENC_B);
+Motor_Control motorDer(R_PWM1, R_PWM2, R_ENC_A, R_ENC_B);
 
 // Funciones ISR
 void ISR_EncIzq() { motorIzq.handleEncoderTick(); }
