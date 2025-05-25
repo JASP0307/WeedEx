@@ -13,6 +13,7 @@ public:
   void setTargetSpeed(float rpm);
   float getCurrentRPM() const;
   void handleEncoderTick();
+  void setTunings(float kp, float ki, float kd);
 
 private:
   int _pwm1, _pwm2, _encA, _encB;
