@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Simulador completo del Robot Quitamaleza
-Simula tanto Arduino como MiniPC para probar comunicación serial
+MiniPC Real del Robot Quitamaleza
+Se conecta a Arduino Mega real via puerto serie
 """
 
 import time
@@ -16,20 +16,19 @@ from typing import Optional, List
 import serial
 import serial.tools.list_ports
 
-# Configurar logging con colores para distinguir componentes
+# Configurar logging con colores
 class ColoredFormatter(logging.Formatter):
     COLORS = {
-        'ARDUINO': '\033[94m',    # Azul
         'MINIPC': '\033[92m',     # Verde
+        'ARDUINO': '\033[94m',    # Azul
         'SYSTEM': '\033[93m',     # Amarillo
         'ERROR': '\033[91m',      # Rojo
         'ENDC': '\033[0m'         # Reset
     }
     
     def format(self, record):
-        # Add default component if it doesn't exist
         if not hasattr(record, 'component'):
-            record.component = 'SYSTEM'  # or whatever default you prefer
+            record.component = 'SYSTEM'
             
         color = self.COLORS.get(record.component, '')
         record.name = f"{color}{{{record.component}}}{self.COLORS['ENDC']}"
@@ -38,18 +37,9 @@ class ColoredFormatter(logging.Formatter):
 # Configurar logging
 handler = logging.StreamHandler()
 handler.setFormatter(ColoredFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-logger = logging.getLogger('SIMULATOR')
+logger = logging.getLogger('ROBOT_SYSTEM')
 logger.addHandler(handler)
 logger.setLevel(logging.INFO)
-
-class ArduinoState(Enum):
-    IDLE = "IDLE"
-    NAVIGATING = "NAVIGATING"
-    RAKE_OPERATION = "RAKE_OPERATION"
-    LASER_POSITIONING = "LASER_POSITIONING"
-    LASER_OPERATION = "LASER_OPERATION"
-    LASER_RETURNING = "LASER_RETURNING"
-    EMERGENCY_STOP = "EMERGENCY_STOP"
 
 class MiniPCState(Enum):
     BOOT_UP = "boot_up"
@@ -72,206 +62,282 @@ class WeedInfo:
     confidence: float
     timestamp: float
 
-class ArduinoSimulator:
-    """Simulador del Arduino Mega"""
+class ArduinoConnection:
+    """Maneja la comunicación con el Arduino Mega real"""
     
-    def __init__(self, serial_port):
-        self.serial_port = serial_port
-        self.current_state = ArduinoState.IDLE
-        self.previous_state = ArduinoState.IDLE
-        self.state_timer = time.time()
+    def __init__(self, port=None, baudrate=115200, timeout=1.0):
+        self.port = port
+        self.baudrate = baudrate
+        self.timeout = timeout
+        self.serial_conn = None
+        self.connected = False
+        self.response_queue = queue.Queue()
+        self.running = False
         
-        # Variables de operación
-        self.navigation_speed = 0
-        self.laser_x = 0
-        self.laser_y = 0
-        self.obstacle_detected = False
-        self.distance = 50  # Distancia simulada del ultrasonido
+        # Logger específico para comunicación Arduino
+        self.logger = logging.getLogger('ARDUINO_COMM')
+        self.logger.addHandler(handler)
+        self.logger.setLevel(logging.INFO)
+    
+    def find_arduino_port(self):
+        """Buscar automáticamente el puerto del Arduino"""
+        self.logger.info("Buscando Arduino Mega...", extra={'component': 'SYSTEM'})
         
-        # Timers para operaciones
-        self.rake_duration = 2.0    # 2 segundos
-        self.laser_duration = 3.0   # 3 segundos
+        ports = serial.tools.list_ports.comports()
+        for port in ports:
+            self.logger.info(f"Puerto encontrado: {port.device} - {port.description}", 
+                           extra={'component': 'SYSTEM'})
+            
+            # Buscar puertos que podrían ser Arduino
+            if any(keyword in port.description.lower() for keyword in 
+                   ['arduino', 'mega', 'ch340', 'usb-serial', 'cp210x']):
+                return port.device
         
-        self.running = True
+        # Si no encuentra uno específico, probar puertos comunes
+        common_ports = ['/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyACM0', '/dev/ttyACM1',
+                       'COM3', 'COM4', 'COM5', 'COM6']
         
-        # Logger específico para Arduino
-        self.logger = logging.getLogger('ARDUINO_SIM')
+        for port in common_ports:
+            try:
+                test_conn = serial.Serial(port, self.baudrate, timeout=0.5)
+                test_conn.close()
+                self.logger.info(f"Puerto disponible: {port}", extra={'component': 'SYSTEM'})
+                return port
+            except:
+                continue
+                
+        return None
+    
+    def connect(self):
+        """Conectar al Arduino"""
+        if not self.port:
+            self.port = self.find_arduino_port()
+            
+        if not self.port:
+            self.logger.error("No se encontró puerto Arduino", extra={'component': 'SYSTEM'})
+            return False
+        
+        try:
+            self.logger.info(f"Conectando a Arduino en {self.port}...", 
+                           extra={'component': 'SYSTEM'})
+            
+            self.serial_conn = serial.Serial(
+                port=self.port,
+                baudrate=self.baudrate,
+                timeout=self.timeout,
+                write_timeout=self.timeout
+            )
+            
+            # Esperar a que Arduino se inicialice
+            time.sleep(2)
+            
+            # Limpiar buffer inicial
+            self.serial_conn.reset_input_buffer()
+            self.serial_conn.reset_output_buffer()
+            
+            self.connected = True
+            self.running = True
+            
+            # Iniciar hilo de lectura
+            self.read_thread = threading.Thread(target=self._read_loop, daemon=True)
+            self.read_thread.start()
+            
+            self.logger.info("Conectado exitosamente al Arduino", 
+                           extra={'component': 'SYSTEM'})
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error conectando: {e}", extra={'component': 'SYSTEM'})
+            return False
+    
+    def disconnect(self):
+        """Desconectar del Arduino"""
+        self.running = False
+        self.connected = False
+        
+        if self.serial_conn and self.serial_conn.is_open:
+            self.serial_conn.close()
+            self.logger.info("Desconectado del Arduino", extra={'component': 'SYSTEM'})
+    
+    def send_command(self, command):
+        """Enviar comando al Arduino"""
+        if not self.connected or not self.serial_conn:
+            self.logger.error("Arduino no conectado", extra={'component': 'SYSTEM'})
+            return False
+        
+        try:
+            message = f"{command}\n"
+            self.serial_conn.write(message.encode())
+            self.logger.info(f"→ {command}", extra={'component': 'ARDUINO'})
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error enviando comando: {e}", extra={'component': 'ARDUINO'})
+            return False
+    
+    def get_response(self, timeout=1.0):
+        """Obtener respuesta del Arduino"""
+        try:
+            return self.response_queue.get(timeout=timeout)
+        except queue.Empty:
+            return None
+    
+    def _read_loop(self):
+        """Hilo de lectura continua del Arduino"""
+        while self.running and self.connected:
+            try:
+                if self.serial_conn.in_waiting > 0:
+                    line = self.serial_conn.readline().decode().strip()
+                    if line:
+                        self.logger.info(f"← {line}", extra={'component': 'ARDUINO'})
+                        self.response_queue.put(line)
+                
+                time.sleep(0.01)  # 10ms delay
+                
+            except Exception as e:
+                if self.running:  # Solo log si no estamos cerrando
+                    self.logger.error(f"Error leyendo: {e}", extra={'component': 'ARDUINO'})
+                break
+        
+        self.connected = False
+
+class WeedDetector:
+    """Simulador de detección de maleza (reemplazar con IA real)"""
+    
+    def __init__(self):
+        self.logger = logging.getLogger('WEED_DETECTOR')
         self.logger.addHandler(handler)
         self.logger.setLevel(logging.INFO)
         
-        # Simular inicialización
-        time.sleep(1)
-        self.send_response("STATUS:ARDUINO_READY")
+        # En implementación real, aquí inicializarías cámara y modelo de IA
+        self.detection_active = False
     
-    def send_response(self, message):
-        """Enviar respuesta por serial"""
-        try:
-            self.serial_port.write(f"{message}\n".encode())
-            self.logger.info(f"→ {message}", extra={'component': 'ARDUINO'})
-        except Exception as e:
-            self.logger.error(f"Error enviando: {e}", extra={'component': 'ARDUINO'})
+    def start_detection(self):
+        """Iniciar detección de maleza"""
+        self.detection_active = True
+        self.logger.info("Detección de maleza activada", extra={'component': 'MINIPC'})
     
-    def simulate_ultrasonics(self):
-        """Simular lecturas de ultrasonido"""
-        # Simular obstáculo ocasionalmente
-        if random.random() < 0.05:  # 5% probabilidad
-            self.distance = random.randint(5, 19)  # Obstáculo detectado
-            if not self.obstacle_detected:
-                self.obstacle_detected = True
-                self.previous_state = self.current_state
-                self.current_state = ArduinoState.EMERGENCY_STOP
-                self.send_response(f"OBSTACLE:distance_{self.distance}cm")
-        else:
-            self.distance = random.randint(30, 100)  # Sin obstáculo
-            if self.obstacle_detected and self.distance > 25:
-                self.obstacle_detected = False
+    def stop_detection(self):
+        """Detener detección de maleza"""
+        self.detection_active = False
+        self.logger.info("Detección de maleza desactivada", extra={'component': 'MINIPC'})
     
-    def execute_state_machine(self):
-        """Ejecutar máquina de estados del Arduino"""
-        current_time = time.time()
+    def detect_weeds(self):
+        """
+        Detectar maleza en tiempo real
+        En implementación real, procesar frames de cámara con IA
+        """
+        if not self.detection_active:
+            return []
         
-        if self.current_state == ArduinoState.IDLE:
-            # Solo esperar comandos
-            pass
-            
-        elif self.current_state == ArduinoState.NAVIGATING:
-            # Mantener navegación
-            pass
-            
-        elif self.current_state == ArduinoState.RAKE_OPERATION:
-            # Simular operación de rastrillos
-            if current_time - self.state_timer >= self.rake_duration:
-                self.current_state = ArduinoState.NAVIGATING
-                self.send_response("STATUS:RAKE_COMPLETE")
-                
-        elif self.current_state == ArduinoState.LASER_POSITIONING:
-            # Simular posicionamiento del láser (1 segundo)
-            if current_time - self.state_timer >= 1.0:
-                self.current_state = ArduinoState.LASER_OPERATION
-                self.send_response("STATUS:LASER_POSITIONED")
-                self.state_timer = current_time
-                
-        elif self.current_state == ArduinoState.LASER_OPERATION:
-            # Simular operación del láser
-            if current_time - self.state_timer >= self.laser_duration:
-                self.current_state = ArduinoState.LASER_RETURNING
-                self.send_response("STATUS:LASER_OFF")
-                self.state_timer = current_time
-                
-        elif self.current_state == ArduinoState.LASER_RETURNING:
-            # Simular retorno del láser (1 segundo)
-            if current_time - self.state_timer >= 1.0:
-                self.current_state = ArduinoState.NAVIGATING
-                self.send_response("STATUS:LASER_HOME")
-                
-        elif self.current_state == ArduinoState.EMERGENCY_STOP:
-            # Solo salir si no hay obstáculo
-            if not self.obstacle_detected:
-                self.current_state = self.previous_state
-                self.send_response("STATUS:EMERGENCY_CLEARED")
-    
-    def process_command(self, command):
-        """Procesar comando recibido"""
-        self.logger.info(f"← {command.strip()}", extra={'component': 'ARDUINO'})
+        weeds = []
         
-        if command.startswith("START_NAV:"):
-            self.navigation_speed = int(command.split(":")[1])
-            self.current_state = ArduinoState.NAVIGATING
-            self.send_response("STATUS:NAV_STARTED")
+        # SIMULACIÓN - Reemplazar con procesamiento real
+        if random.random() < 0.15:  # 15% probabilidad por segundo
+            weed_type = 'mechanical' if random.random() < 0.7 else 'laser'
+            x = random.randint(50, 150)
+            y = random.randint(50, 150)
             
-        elif command.startswith("DEPLOY_RAKES"):
-            if self.current_state == ArduinoState.NAVIGATING:
-                self.current_state = ArduinoState.RAKE_OPERATION
-                self.state_timer = time.time()
-                self.send_response("STATUS:RAKES_DEPLOYED")
-                
-        elif command.startswith("LASER_POS:"):
-            coords = command.split(":")[1].split(",")
-            self.laser_x = int(coords[0])
-            self.laser_y = int(coords[1])
-            if self.current_state == ArduinoState.NAVIGATING:
-                self.current_state = ArduinoState.LASER_POSITIONING
-                self.state_timer = time.time()
-                
-        elif command == "EMERGENCY_STOP":
-            self.previous_state = self.current_state
-            self.current_state = ArduinoState.EMERGENCY_STOP
+            weed = WeedInfo(
+                x=x, y=y,
+                weed_type=weed_type,
+                confidence=random.uniform(0.7, 0.95),
+                timestamp=time.time()
+            )
             
-        elif command == "GET_SENSORS":
-            self.send_response(f"SENSORS:US_{self.distance}cm,STATE_{self.current_state.value}")
-            
-        elif command == "STOP":
-            self.current_state = ArduinoState.IDLE
-            self.send_response("STATUS:STOPPED")
-    
-    def run(self):
-        """Loop principal del Arduino simulado"""
-        last_ultrasonic_time = time.time()
+            weeds.append(weed)
+            self.logger.info(f"Maleza detectada: {weed_type} en ({x}, {y}) - Conf: {weed.confidence:.2f}", 
+                           extra={'component': 'MINIPC'})
         
-        while self.running:
-            try:
-                # Simular ultrasonidos cada 100ms
-                if time.time() - last_ultrasonic_time >= 0.1:
-                    self.simulate_ultrasonics()
-                    last_ultrasonic_time = time.time()
-                
-                # Ejecutar máquina de estados
-                self.execute_state_machine()
-                
-                # Procesar comandos recibidos
-                if self.serial_port.in_waiting > 0:
-                    command = self.serial_port.readline().decode().strip()
-                    if command:
-                        self.process_command(command)
-                
-                time.sleep(0.01)  # 10ms loop
-                
-            except Exception as e:
-                self.logger.error(f"Error en loop: {e}", extra={'component': 'ARDUINO'})
+        return weeds
 
-class MiniPCSimulator:
-    """Simulador de la MiniPC"""
+class GPSSimulator:
+    """Simulador de GPS (reemplazar con GPS real)"""
     
-    def __init__(self, serial_port):
-        self.serial_port = serial_port
+    def __init__(self):
+        self.x = 0.0
+        self.y = 0.0
+        self.speed = 0.5  # m/s
+        self.logger = logging.getLogger('GPS')
+        self.logger.addHandler(handler)
+        self.logger.setLevel(logging.INFO)
+    
+    def update_position(self, dt):
+        """Actualizar posición GPS"""
+        self.x += self.speed * dt
+        # En implementación real, leer GPS actual
+    
+    def get_position(self):
+        """Obtener posición actual"""
+        return self.x, self.y
+
+class MiniPCController:
+    """Controlador principal de la MiniPC"""
+    
+    def __init__(self, arduino_port=None):
+        self.arduino = ArduinoConnection(arduino_port)
+        self.weed_detector = WeedDetector()
+        self.gps = GPSSimulator()
+        
+        # Estado del sistema
         self.current_state = MiniPCState.BOOT_UP
         self.previous_state = None
         self.state_start_time = time.time()
         self.mission_start_time = None
         
-        # Configuración
+        # Configuración de misión
         self.navigation_speed = 100
         self.max_surcos = 2
         self.current_surco = 1
+        self.surco_length = 50  # metros
         self.mission_stats = {'weeds_mechanical': 0, 'weeds_laser': 0}
         
-        # Estado del sistema
-        self.arduino_connected = False
+        # Control de sistema
         self.emergency_active = False
-        self.position_x = 0
-        self.surco_end_x = 50  # Longitud del surco en metros
-        
-        # Cola de comandos internos
-        self.command_queue = queue.Queue()
-        
         self.running = True
         
-        # Logger específico para MiniPC
-        self.logger = logging.getLogger('MINIPC_SIM')
+        # Logger principal
+        self.logger = logging.getLogger('MINIPC_CTRL')
         self.logger.addHandler(handler)
         self.logger.setLevel(logging.INFO)
-        
-        # Inicializar
-        self.arduino_connected = True
-        self.change_state(MiniPCState.READY_TO_START)
     
-    def send_arduino_command(self, command):
-        """Enviar comando al Arduino"""
-        try:
-            self.serial_port.write(f"{command}\n".encode())
-            self.logger.info(f"→ {command}", extra={'component': 'MINIPC'})
-        except Exception as e:
-            self.logger.error(f"Error enviando: {e}", extra={'component': 'MINIPC'})
+    def initialize(self):
+        """Inicializar sistema"""
+        self.logger.info("=== INICIANDO MINIPC ROBOT QUITAMALEZA ===", 
+                        extra={'component': 'SYSTEM'})
+        
+        # Conectar al Arduino
+        if not self.arduino.connect():
+            self.logger.error("Fallo conectando al Arduino", extra={'component': 'SYSTEM'})
+            return False
+        
+        # Esperar confirmación del Arduino
+        timeout = time.time() + 10  # 10 segundos timeout
+        arduino_ready = False
+        
+        while time.time() < timeout and not arduino_ready:
+            response = self.arduino.get_response(timeout=1.0)
+            if response and "STATUS:ARDUINO_READY" in response:
+                arduino_ready = True
+                break
+            time.sleep(0.1)
+        
+        if not arduino_ready:
+            self.logger.error("Arduino no responde", extra={'component': 'SYSTEM'})
+            return False
+        
+        self.change_state(MiniPCState.READY_TO_START)
+        self.logger.info("Sistema inicializado correctamente", extra={'component': 'SYSTEM'})
+        return True
+    
+    def shutdown(self):
+        """Cerrar sistema limpiamente"""
+        self.logger.info("Cerrando sistema...", extra={'component': 'SYSTEM'})
+        self.running = False
+        self.arduino.send_command("STOP")
+        time.sleep(0.5)
+        self.arduino.disconnect()
+        self.weed_detector.stop_detection()
     
     def change_state(self, new_state):
         """Cambiar estado del sistema"""
@@ -282,124 +348,54 @@ class MiniPCSimulator:
             self.current_state = new_state
             self.state_start_time = time.time()
     
-    def simulate_weed_detection(self):
-        """Simular detección de maleza"""
-        if self.current_state == MiniPCState.NAVIGATING:
-            # 15% probabilidad de detectar maleza cada segundo
-            if random.random() < 0.15:
-                weed_type = 'mechanical' if random.random() < 0.7 else 'laser'
-                x = random.randint(50, 150)
-                y = random.randint(50, 150)
-                
-                weed = WeedInfo(
-                    x=x, y=y, 
-                    weed_type=weed_type, 
-                    confidence=random.uniform(0.7, 0.95),
-                    timestamp=time.time()
-                )
-                
-                self.command_queue.put({
-                    'action': 'weed_detected',
-                    'weed_info': weed
-                })
-                
-                self.logger.info(f"Maleza detectada: {weed_type} en ({x}, {y})", 
-                               extra={'component': 'MINIPC'})
-    
-    def simulate_position_update(self):
-        """Simular actualización de posición GPS"""
-        if self.current_state == MiniPCState.NAVIGATING:
-            self.position_x += 0.5  # Avanzar 0.5m por segundo
-    
-    def execute_state_machine(self):
-        """Ejecutar máquina de estados de la MiniPC"""
-        current_time = time.time()
+    def start_mission(self):
+        """Iniciar misión de desmalezado"""
+        self.logger.info("=== INICIANDO MISIÓN DE DESMALEZADO ===", 
+                        extra={'component': 'MINIPC'})
         
-        if self.current_state == MiniPCState.BOOT_UP:
-            if self.arduino_connected:
-                self.change_state(MiniPCState.READY_TO_START)
-                
-        elif self.current_state == MiniPCState.READY_TO_START:
-            # Auto-iniciar misión después de 3 segundos
-            if current_time - self.state_start_time >= 3.0:
-                self.mission_start_time = time.time()
-                self.current_surco = 1
-                self.position_x = 0
-                self.send_arduino_command(f"START_NAV:{self.navigation_speed}")
-                self.change_state(MiniPCState.NAVIGATING)
-                
-        elif self.current_state == MiniPCState.NAVIGATING:
-            # Verificar si llegamos al final del surco
-            if self.position_x >= self.surco_end_x:
-                if self.current_surco < self.max_surcos:
-                    self.change_state(MiniPCState.TURNING_SEQUENCE)
-                else:
-                    self.change_state(MiniPCState.MISSION_COMPLETE)
-                return
-            
-            # Procesar comandos de weeding
-            if not self.command_queue.empty():
-                command = self.command_queue.get()
-                if command.get('action') == 'weed_detected':
-                    weed_info = command.get('weed_info')
-                    if weed_info.weed_type == 'mechanical':
-                        self.deploy_mechanical_weeding()
-                    elif weed_info.weed_type == 'laser':
-                        self.start_laser_weeding(weed_info.x, weed_info.y)
-                        
-        elif self.current_state == MiniPCState.TURNING_SEQUENCE:
-            # Simular giro (2 segundos)
-            if current_time - self.state_start_time >= 2.0:
-                self.current_surco += 1
-                self.position_x = 0  # Reset posición
-                self.logger.info(f"Iniciando surco {self.current_surco}", 
-                               extra={'component': 'MINIPC'})
-                self.send_arduino_command(f"START_NAV:{self.navigation_speed}")
-                self.change_state(MiniPCState.NAVIGATING)
-                
-        elif self.current_state == MiniPCState.MISSION_COMPLETE:
-            self.send_arduino_command("STOP")
-            self.send_mission_report()
-            # Reiniciar después de 5 segundos
-            if current_time - self.state_start_time >= 5.0:
-                self.change_state(MiniPCState.READY_TO_START)
+        self.mission_start_time = time.time()
+        self.current_surco = 1
+        self.gps.x = 0
+        self.mission_stats = {'weeds_mechanical': 0, 'weeds_laser': 0}
+        
+        # Iniciar navegación
+        self.arduino.send_command(f"START_NAV:{self.navigation_speed}")
+        self.weed_detector.start_detection()
+        self.change_state(MiniPCState.NAVIGATING)
+    
+    def process_weeds(self, weeds):
+        """Procesar maleza detectada"""
+        for weed in weeds:
+            if weed.weed_type == 'mechanical':
+                self.deploy_mechanical_weeding()
+            elif weed.weed_type == 'laser':
+                self.start_laser_weeding(weed.x, weed.y)
+            break  # Procesar una maleza a la vez
     
     def deploy_mechanical_weeding(self):
         """Desplegar desmalezado mecánico"""
-        self.send_arduino_command("DEPLOY_RAKES")
-        self.mission_stats['weeds_mechanical'] += 1
-        self.change_state(MiniPCState.MECHANICAL_WEEDING)
+        if self.current_state == MiniPCState.NAVIGATING:
+            self.arduino.send_command("DEPLOY_RAKES")
+            self.mission_stats['weeds_mechanical'] += 1
+            self.change_state(MiniPCState.MECHANICAL_WEEDING)
     
     def start_laser_weeding(self, x, y):
         """Iniciar desmalezado con láser"""
-        self.send_arduino_command(f"LASER_POS:{x},{y}")
-        self.mission_stats['weeds_laser'] += 1
-        self.change_state(MiniPCState.LASER_POSITIONING)
+        if self.current_state == MiniPCState.NAVIGATING:
+            self.arduino.send_command(f"LASER_POS:{x},{y}")
+            self.mission_stats['weeds_laser'] += 1
+            self.change_state(MiniPCState.LASER_POSITIONING)
     
-    def send_mission_report(self):
-        """Enviar reporte de misión"""
-        if self.mission_start_time:
-            duration = time.time() - self.mission_start_time
-            report = {
-                'stats': {
-                    **self.mission_stats,
-                    'duration_minutes': round(duration / 60, 2),
-                    'surcos_completed': self.current_surco
-                }
-            }
-            self.logger.info(f"Misión completada: {report['stats']}", 
-                           extra={'component': 'MINIPC'})
-    
-    def process_arduino_response(self, response):
-        """Procesar respuesta del Arduino"""
-        self.logger.info(f"← {response.strip()}", extra={'component': 'MINIPC'})
+    def process_arduino_responses(self):
+        """Procesar respuestas del Arduino"""
+        response = self.arduino.get_response(timeout=0.1)
+        if not response:
+            return
         
         if response.startswith("STATUS:"):
             status = response.split(":")[1]
             
-            if status == "ARDUINO_READY":
-                self.arduino_connected = True
-            elif status == "RAKE_COMPLETE":
+            if status == "RAKE_COMPLETE":
                 self.change_state(MiniPCState.NAVIGATING)
             elif status == "LASER_POSITIONED":
                 self.change_state(MiniPCState.LASER_TARGETING)
@@ -409,112 +405,129 @@ class MiniPCSimulator:
                 self.change_state(MiniPCState.NAVIGATING)
             elif status == "EMERGENCY_CLEARED":
                 self.emergency_active = False
+                self.change_state(self.previous_state or MiniPCState.NAVIGATING)
                 
         elif response.startswith("OBSTACLE:"):
             self.emergency_active = True
             if self.current_state != MiniPCState.EMERGENCY_STOP:
                 self.change_state(MiniPCState.EMERGENCY_STOP)
+                
+        elif response.startswith("SENSORS:"):
+            # Procesar datos de sensores si es necesario
+            pass
+    
+    def execute_state_machine(self):
+        """Ejecutar máquina de estados principal"""
+        current_time = time.time()
+        
+        if self.current_state == MiniPCState.BOOT_UP:
+            # Estado inicial, esperar conexión
+            pass
+            
+        elif self.current_state == MiniPCState.READY_TO_START:
+            # Auto-iniciar misión después de 3 segundos
+            if current_time - self.state_start_time >= 3.0:
+                self.start_mission()
+                
+        elif self.current_state == MiniPCState.NAVIGATING:
+            # Actualizar posición
+            dt = current_time - getattr(self, '_last_position_update', current_time)
+            self.gps.update_position(dt)
+            self._last_position_update = current_time
+            
+            # Verificar fin de surco
+            if self.gps.x >= self.surco_length:
+                if self.current_surco < self.max_surcos:
+                    self.change_state(MiniPCState.TURNING_SEQUENCE)
+                else:
+                    self.change_state(MiniPCState.MISSION_COMPLETE)
+                return
+            
+            # Procesar detección de maleza
+            weeds = self.weed_detector.detect_weeds()
+            if weeds:
+                self.process_weeds(weeds)
+                
+        elif self.current_state == MiniPCState.TURNING_SEQUENCE:
+            # Simular giro entre surcos (2 segundos)
+            if current_time - self.state_start_time >= 2.0:
+                self.current_surco += 1
+                self.gps.x = 0  # Reset posición
+                self.logger.info(f"Iniciando surco {self.current_surco}/{self.max_surcos}", 
+                               extra={'component': 'MINIPC'})
+                self.arduino.send_command(f"START_NAV:{self.navigation_speed}")
+                self.change_state(MiniPCState.NAVIGATING)
+                
+        elif self.current_state == MiniPCState.MISSION_COMPLETE:
+            self.arduino.send_command("STOP")
+            self.weed_detector.stop_detection()
+            self.send_mission_report()
+            
+            # Reiniciar después de 10 segundos
+            if current_time - self.state_start_time >= 10.0:
+                self.change_state(MiniPCState.READY_TO_START)
+                
+        elif self.current_state == MiniPCState.EMERGENCY_STOP:
+            # Esperar que se despeje la emergencia
+            pass
+    
+    def send_mission_report(self):
+        """Enviar reporte de misión"""
+        if self.mission_start_time:
+            duration = time.time() - self.mission_start_time
+            report = {
+                'surcos_completed': self.current_surco,
+                'weeds_mechanical': self.mission_stats['weeds_mechanical'],
+                'weeds_laser': self.mission_stats['weeds_laser'],
+                'duration_minutes': round(duration / 60, 2),
+                'distance_meters': round(self.gps.x, 1)
+            }
+            
+            self.logger.info(f"=== MISIÓN COMPLETADA ===", extra={'component': 'MINIPC'})
+            self.logger.info(f"Surcos: {report['surcos_completed']}", extra={'component': 'MINIPC'})
+            self.logger.info(f"Maleza mecánica: {report['weeds_mechanical']}", extra={'component': 'MINIPC'})
+            self.logger.info(f"Maleza láser: {report['weeds_laser']}", extra={'component': 'MINIPC'})
+            self.logger.info(f"Duración: {report['duration_minutes']} min", extra={'component': 'MINIPC'})
+            self.logger.info(f"Distancia: {report['distance_meters']} m", extra={'component': 'MINIPC'})
     
     def run(self):
-        """Loop principal de la MiniPC simulada"""
-        last_detection_time = time.time()
-        last_position_time = time.time()
+        """Loop principal del sistema"""
+        if not self.initialize():
+            return
         
-        while self.running:
-            try:
-                current_time = time.time()
-                
-                # Simular detección de maleza cada segundo
-                if current_time - last_detection_time >= 1.0:
-                    self.simulate_weed_detection()
-                    last_detection_time = current_time
-                
-                # Actualizar posición cada segundo
-                if current_time - last_position_time >= 1.0:
-                    self.simulate_position_update()
-                    last_position_time = current_time
-                
+        self.logger.info("Sistema funcionando. Presiona Ctrl+C para detener.", 
+                        extra={'component': 'SYSTEM'})
+        
+        try:
+            while self.running:
                 # Ejecutar máquina de estados
                 self.execute_state_machine()
                 
                 # Procesar respuestas del Arduino
-                if self.serial_port.in_waiting > 0:
-                    response = self.serial_port.readline().decode().strip()
-                    if response:
-                        self.process_arduino_response(response)
+                self.process_arduino_responses()
                 
                 time.sleep(0.1)  # 100ms loop
                 
-            except Exception as e:
-                self.logger.error(f"Error en loop: {e}", extra={'component': 'MINIPC'})
-
-class VirtualSerialPort:
-    """Puerto serie virtual para comunicación bidireccional"""
-    
-    def __init__(self):
-        self.buffer_a_to_b = queue.Queue()
-        self.buffer_b_to_a = queue.Queue()
-        
-    def get_port_a(self):
-        return VirtualPort(self.buffer_a_to_b, self.buffer_b_to_a)
-    
-    def get_port_b(self):
-        return VirtualPort(self.buffer_b_to_a, self.buffer_a_to_b)
-
-class VirtualPort:
-    """Puerto virtual individual"""
-    
-    def __init__(self, send_buffer, receive_buffer):
-        self.send_buffer = send_buffer
-        self.receive_buffer = receive_buffer
-        
-    def write(self, data):
-        self.send_buffer.put(data)
-        
-    def readline(self):
-        try:
-            return self.receive_buffer.get_nowait()
-        except queue.Empty:
-            return b""
-    
-    @property
-    def in_waiting(self):
-        return self.receive_buffer.qsize()
+        except KeyboardInterrupt:
+            self.logger.info("Interrupción del usuario", extra={'component': 'SYSTEM'})
+        except Exception as e:
+            self.logger.error(f"Error en loop principal: {e}", extra={'component': 'SYSTEM'})
+        finally:
+            self.shutdown()
 
 def main():
-    """Función principal del simulador"""
-    logger.info("=== INICIANDO SIMULADOR ROBOT QUITAMALEZA ===", extra={'component': 'SYSTEM'})
+    """Función principal"""
+    import argparse
     
-    # Crear puerto serie virtual
-    virtual_serial = VirtualSerialPort()
-    arduino_port = virtual_serial.get_port_a()
-    minipc_port = virtual_serial.get_port_b()
+    parser = argparse.ArgumentParser(description='MiniPC Robot Quitamaleza')
+    parser.add_argument('--port', '-p', help='Puerto serie del Arduino (ej: /dev/ttyUSB0 o COM3)')
+    parser.add_argument('--baudrate', '-b', type=int, default=115200, help='Baudrate (default: 115200)')
     
-    # Crear simuladores
-    arduino_sim = ArduinoSimulator(arduino_port)
-    minipc_sim = MiniPCSimulator(minipc_port)
+    args = parser.parse_args()
     
-    # Crear threads
-    arduino_thread = threading.Thread(target=arduino_sim.run, daemon=True)
-    minipc_thread = threading.Thread(target=minipc_sim.run, daemon=True)
-    
-    # Iniciar threads
-    arduino_thread.start()
-    minipc_thread.start()
-    
-    logger.info("Simuladores iniciados. Presiona Ctrl+C para detener.", extra={'component': 'SYSTEM'})
-    
-    try:
-        # Mantener programa corriendo
-        while True:
-            time.sleep(1)
-            
-    except KeyboardInterrupt:
-        logger.info("Deteniendo simuladores...", extra={'component': 'SYSTEM'})
-        arduino_sim.running = False
-        minipc_sim.running = False
-        
-    logger.info("=== SIMULADOR TERMINADO ===", extra={'component': 'SYSTEM'})
+    # Crear y ejecutar controlador
+    controller = MiniPCController(arduino_port=args.port)
+    controller.run()
 
 if __name__ == "__main__":
     main()
