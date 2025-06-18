@@ -7,6 +7,8 @@
 #include "MotorModule.h"
 #include "ServoModule.h"
 #include "YawSensor.h"
+#include "Ultrasonico.h"
+#include "PinOut.h"
 
 // Definición de estados
 enum RobotState {
@@ -37,11 +39,35 @@ SemaphoreHandle_t stateMutex;
 volatile RobotState currentState = IDLE;
 
 // Crear motores con pines de interrupción diferentes
-MotorModule motorIzq(10, 11, 22, 23, 2, 4, 360, 50);
-MotorModule motorDer(12, 13, 24, 25, 3, 5, 360, 50);
+MotorModule motorIzq(Pinout::Locomocion::MotorIzquierdo::rPWM,
+                     Pinout::Locomocion::MotorIzquierdo::lPWM,
+                     Pinout::Locomocion::MotorIzquierdo::rEN,
+                     Pinout::Locomocion::MotorIzquierdo::lEN,
+                     Pinout::Locomocion::MotorIzquierdo::ENC_A,
+                     Pinout::Locomocion::MotorIzquierdo::ENC_B,
+                     360, 50);
+                     
+MotorModule motorDer(Pinout::Locomocion::MotorDerecho::rPWM,
+                     Pinout::Locomocion::MotorDerecho::lPWM,
+                     Pinout::Locomocion::MotorDerecho::rEN,
+                     Pinout::Locomocion::MotorDerecho::lEN,
+                     Pinout::Locomocion::MotorDerecho::ENC_A,
+                     Pinout::Locomocion::MotorDerecho::ENC_B,
+                     360, 50);
 
-ServoModule SERV_01(6, 15); // Pin 6
+ServoModule SERV_01(Pinout::BrazoDelta::SERVO_1);
+ServoModule SERV_02(Pinout::BrazoDelta::SERVO_2);
+ServoModule SERV_03(Pinout::BrazoDelta::SERVO_3);
+
 YawSensor yawSensor;
+Ultrasonico UltrDer(Pinout::Sensores::Ultra_Der::TRIG, Pinout::Sensores::Ultra_Der::ECHO);
+Ultrasonico UltrIzq(Pinout::Sensores::Ultra_Izq::TRIG, Pinout::Sensores::Ultra_Izq::ECHO);
+Ultrasonico UltrFront(Pinout::Sensores::Ultra_Front::TRIG, Pinout::Sensores::Ultra_Front::ECHO);
+
+Ultrasonico sensores[] = {UltrFront}; 
+const int NUM_SENSORES = sizeof(sensores) / sizeof(sensores[0]);
+
+const uint8_t DISTANCIA_MINIMA = 5;
 
 // Prototipos de tareas
 void TaskFSM(void *pvParameters);
@@ -50,7 +76,7 @@ void TaskActuation(void *pvParameters);
 void TaskSensors(void *pvParameters);
 void TaskBattery(void *pvParameters);
 void TaskComms(void *pvParameters);
-void TaskServoInit(void *pvParameters);
+void TaskServoControl(void *pvParameters);
 
 // Funciones auxiliares
 RobotState getState();
@@ -91,7 +117,7 @@ void setup() {
   // Activar control PID
   motorIzq.activarPID(true);
   motorDer.activarPID(true);
-  
+  SERV_01.begin();
   Serial.println("Motores inicializados");
   
   // Crear tareas
@@ -101,15 +127,12 @@ void setup() {
   xTaskCreate(TaskSensors,    "Sensors",    256, NULL, 2, NULL);
   xTaskCreate(TaskBattery,    "Battery",    128, NULL, 2, NULL);
   xTaskCreate(TaskComms,      "Comms",      256, NULL, 2, NULL);
-  xTaskCreate(TaskServoInit,  "ServoInit",  256, NULL, 1, NULL); // Tarea separada para servo
-  
+  xTaskCreate(TaskServoControl,  "ServoControl",  256, NULL, 1, NULL);
   
   Serial.println("Tareas FreeRTOS creadas");
 }
 
-void loop() {
-  // No se usa con FreeRTOS
-}
+void loop() {}
 
 // Funciones thread-safe para estado
 RobotState getState() {
@@ -128,12 +151,17 @@ void setState(RobotState newState) {
   }
 }
 
-// Tarea separada para inicializar servo
-void TaskServoInit(void *pvParameters) {
+void TaskServoControl(void *pvParameters) {
   (void) pvParameters;
+
+  vTaskDelay(pdMS_TO_TICKS(1000)); 
   
+  SERV_01.begin();
+  SERV_01.setTarget(120);
+
   for (;;) {
-    vTaskDelay(pdMS_TO_TICKS(500));
+    SERV_01.update();
+    vTaskDelay(pdMS_TO_TICKS(50)); 
   }
 }
 
@@ -155,6 +183,7 @@ void TaskFSM(void *pvParameters) {
               motorIzq.activarPID(true);
               motorDer.activarPID(true);
             }
+            SERV_01.setTarget(30);
             setState(NAVIGATING);
             Serial.println("Estado: NAVIGATING");
           } else if (receivedEvent == EVENT_LOW_BATTERY) {
@@ -174,6 +203,7 @@ void TaskFSM(void *pvParameters) {
             // Detener motores gradualmente
             motorIzq.establecerSetpoint(0);
             motorDer.establecerSetpoint(0);
+            SERV_01.setTarget(180); // Mover a 120 grados
             setState(IDLE);
             Serial.println("Estado: IDLE");
           }
@@ -183,7 +213,11 @@ void TaskFSM(void *pvParameters) {
           // Detener motores y cambiar a actuación
           motorIzq.establecerSetpoint(0);
           motorDer.establecerSetpoint(0);
-          setState(ACTUATING);
+          // Iniciar el movimiento del actuador (servo)
+          Serial.println("Comando: Mover servo a posición de ataque (120°)");
+          SERV_01.setTarget(30); // Mover a 120 grados
+          
+          //setState(ACTUATING);
           Serial.println("Estado: ACTUATING");
           break;
 
@@ -244,7 +278,7 @@ void TaskLocomotion(void *pvParameters) {
     // Actualizar ambos motores
     bool izqActualizado = motorIzq.actualizar();
     bool derActualizado = motorDer.actualizar();
-    
+    /*
     // Imprimir datos solo si algún motor se actualizó
     if (izqActualizado || derActualizado) {
       // Formato: MotorID,Setpoint,RPM,PWM
@@ -255,7 +289,7 @@ void TaskLocomotion(void *pvParameters) {
         //motorDer.imprimirCSV();
       }
     }
-    
+    */
     // Usar vTaskDelayUntil para mantener frecuencia constante
     vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(20)); // 50Hz
   }
@@ -286,22 +320,19 @@ void TaskSensors(void *pvParameters) {
     yawSensor.update();
     
     float yaw = yawSensor.getYaw();
-    Serial.print("Yaw Angle [°]: ");
-    Serial.println(yaw, 2); // 2 decimales
-    
-    // Usar vTaskDelayUntil para timing más preciso
+    //Serial.print("Yaw Angle [°]: ");
+    //Serial.println(yaw, 2); // 2 decimales
+
+    for (int i = 0; i < NUM_SENSORES; i++) {
+      if (sensores[i].distancia() < DISTANCIA_MINIMA) {
+          FSMEvent e = EVENT_OBSTACLE;
+          xQueueSend(fsmQueue, &e, 0);
+          break;
+      }
+    }
     vTaskDelayUntil(&lastWakeTime, delayTicks);
   }
 }
-
-// Leer sensores de seguridad
-    // TODO: Implementar lectura de sensores
-    
-    // Ejemplo: detectar obstáculo
-    // if (sensorObstaculo.leer() < DISTANCIA_MINIMA) {
-    //     FSMEvent e = EVENT_OBSTACLE;
-    //     xQueueSend(fsmQueue, &e, 0);
-    // }
 
 void TaskBattery(void *pvParameters) {
   (void) pvParameters;
@@ -341,6 +372,11 @@ void TaskComms(void *pvParameters) {
         FSMEvent e = EVENT_STOP;
         xQueueSend(fsmQueue, &e, 0);
         Serial.println("ACK,STOP");
+      }
+      else if (msg.equals("CMD,RESUME")) {
+        FSMEvent e = EVENT_RESUME;
+        xQueueSend(fsmQueue, &e, 0);
+        Serial.println("ACK,RESUME");
       }
       else if (msg.startsWith("CMD,SPEED,")) {
         // Formato: CMD,SPEED,LEFT,RIGHT

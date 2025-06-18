@@ -4,24 +4,37 @@
 #include <Arduino.h>
 #include <Servo.h>
 
-class ServoModule {
-  public:
-    ServoModule(uint8_t pin, int delayPaso = 15);
-    bool moverASuavemente(int anguloObjetivo);
-    void setAnguloActual(int angulo);
-    int getAnguloActual();
-    bool estaEnMovimiento();
-    void detener();
+// --- Declaración de la Clase ServoModule ---
+// Contiene las firmas de las funciones y las variables miembro.
 
-  private:
-    Servo servo;
-    uint8_t pin;
-    int anguloActual;
-    int anguloDestino;
-    int delayPorPaso;
-    unsigned long ultimoUpdate;
-    bool enMovimiento;
-    bool inicializado;
+class ServoModule {
+public:
+  // Constructor: Se ejecuta al crear un objeto ServoModule.
+  ServoModule(uint8_t pin);
+
+  // Inicializa y adjunta el servo al pin especificado.
+  // Se puede proporcionar un ángulo inicial, por defecto es 90.
+  void begin(int initialAngle = 90);
+
+  // Establece el ángulo objetivo al que se moverá el servo.
+  void setTarget(int angle);
+
+  // Actualiza la posición del servo, moviéndolo un paso hacia el objetivo.
+  // Devuelve 'true' si el servo todavía está en movimiento.
+  // Debe ser llamado repetidamente desde una tarea RTOS.
+  bool update();
+
+  // Devuelve la posición angular actual del servo.
+  int getCurrentAngle();
+
+private:
+  Servo _servo;           // La instancia del objeto de la librería Servo.
+  uint8_t _pin;           // El pin al que está conectado el servo.
+  
+  // 'volatile' es importante en un entorno RTOS, ya que estas variables
+  // pueden ser modificadas por una tarea y leídas por otra.
+  volatile int _targetAngle;  // Posición a la que queremos que se mueva.
+  volatile int _currentAngle; // Posición actual registrada del servo.
 };
 
-#endif
+#endif // SERVOMODULE_H
