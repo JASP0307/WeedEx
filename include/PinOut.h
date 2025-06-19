@@ -45,7 +45,14 @@ namespace Pinout {
     // SUBSISTEMA DE ACTUACIÓN (RASTRILLOS)
     //----------------------------------------------------------------
     namespace Rastrillos {
-        constexpr uint8_t SERVO_1 = 9;
+        constexpr uint8_t SERVO_4 = 9;
+    }
+
+    //================================================================
+    // SUBSISTEMA DE ACTUACIÓN (LASER])
+    //----------------------------------------------------------------
+    namespace Laser {
+        constexpr uint8_t Laser_1 = 38;
     }
 
     //================================================================
@@ -61,8 +68,8 @@ namespace Pinout {
 
         // --- SENSOR ULTRASÓNICO FRONTAL ---
         namespace Ultra_Der {
-            constexpr uint8_t TRIG = 52;
-            constexpr uint8_t ECHO = 50;
+            constexpr uint8_t TRIG = 44;
+            constexpr uint8_t ECHO = 42;
         }
 
         // --- SENSOR ULTRASÓNICO DERECHA ---
@@ -73,8 +80,8 @@ namespace Pinout {
 
         // --- SENSOR ULTRASÓNICO IZQUIERDA ---
         namespace Ultra_Izq {
-            constexpr uint8_t TRIG = 44;
-            constexpr uint8_t ECHO = 40;
+            constexpr uint8_t TRIG = 52;
+            constexpr uint8_t ECHO = 50;
         }
     }
 

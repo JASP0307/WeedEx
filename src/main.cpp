@@ -9,12 +9,15 @@
 #include "YawSensor.h"
 #include "Ultrasonico.h"
 #include "PinOut.h"
+#include "Laser.h"
 
 // Definición de estados
 enum RobotState {
   IDLE,
   NAVIGATING,
-  WEED_FOUND,
+  MOVING_TO_WEED,
+  LASERING,
+  RETURNING_HOME,
   ACTUATING,
   ERROR_STATE,
   LOW_BATTERY,
@@ -26,10 +29,23 @@ typedef enum {
   EVENT_NAVIGATE,
   EVENT_STOP,
   EVENT_OBSTACLE,
+  EVENT_RAKE_WEED_FOUND,
+  EVENT_WEED_FOUND,   
+  EVENT_ARM_AT_TARGET,
+  EVENT_LASER_COMPLETE,
+  EVENT_ARM_AT_HOME,
   EVENT_LOW_BATTERY,
   EVENT_ERROR,
   EVENT_RESUME
 } FSMEvent;
+
+enum ArmCommand {
+  CMD_IDLE,
+  CMD_MOVE_TO_TARGET,
+  CMD_RETURN_HOME
+};
+
+volatile ArmCommand g_armCommand = CMD_IDLE;
 
 // Handles globales
 QueueHandle_t fsmQueue;
@@ -58,16 +74,32 @@ MotorModule motorDer(Pinout::Locomocion::MotorDerecho::rPWM,
 ServoModule SERV_01(Pinout::BrazoDelta::SERVO_1);
 ServoModule SERV_02(Pinout::BrazoDelta::SERVO_2);
 ServoModule SERV_03(Pinout::BrazoDelta::SERVO_3);
+ServoModule SERV_04(Pinout::Rastrillos::SERVO_4);
 
 YawSensor yawSensor;
 Ultrasonico UltrDer(Pinout::Sensores::Ultra_Der::TRIG, Pinout::Sensores::Ultra_Der::ECHO);
 Ultrasonico UltrIzq(Pinout::Sensores::Ultra_Izq::TRIG, Pinout::Sensores::Ultra_Izq::ECHO);
 Ultrasonico UltrFront(Pinout::Sensores::Ultra_Front::TRIG, Pinout::Sensores::Ultra_Front::ECHO);
 
-Ultrasonico sensores[] = {UltrFront}; 
+Ultrasonico sensores[] = {UltrDer, UltrFront, UltrIzq}; 
 const int NUM_SENSORES = sizeof(sensores) / sizeof(sensores[0]);
 
-const uint8_t DISTANCIA_MINIMA = 5;
+const int POS_INICIAL_RASTRILLO = 90; // Posición de reposo
+const int POS_TRABAJO_RASTRILLO = 10; // Posición para rastrillar
+
+// --- Variables para la gestión de la acción ---
+bool g_isRaking = false;
+TickType_t g_rakeStartTime = 0;
+
+Laser Laser_01(Pinout::Laser::Laser_1);
+
+// Tiempos de simulación en milisegundos
+const int SIMULATED_MOVE_TIME_MS = 3000;
+const uint8_t DISTANCIA_MINIMA = 40;
+TickType_t obstacleEntryTime = 0;
+TickType_t laserStartTime  = 0;
+
+
 
 // Prototipos de tareas
 void TaskFSM(void *pvParameters);
@@ -77,6 +109,7 @@ void TaskSensors(void *pvParameters);
 void TaskBattery(void *pvParameters);
 void TaskComms(void *pvParameters);
 void TaskServoControl(void *pvParameters);
+void TaskSimulateArm(void *pvParameters);
 
 // Funciones auxiliares
 RobotState getState();
@@ -128,7 +161,8 @@ void setup() {
   xTaskCreate(TaskBattery,    "Battery",    128, NULL, 2, NULL);
   xTaskCreate(TaskComms,      "Comms",      256, NULL, 2, NULL);
   xTaskCreate(TaskServoControl,  "ServoControl",  256, NULL, 1, NULL);
-  
+  xTaskCreate(TaskSimulateArm, "Arm Sim Task", 256, NULL, 1, NULL);
+
   Serial.println("Tareas FreeRTOS creadas");
 }
 
@@ -151,20 +185,6 @@ void setState(RobotState newState) {
   }
 }
 
-void TaskServoControl(void *pvParameters) {
-  (void) pvParameters;
-
-  vTaskDelay(pdMS_TO_TICKS(1000)); 
-  
-  SERV_01.begin();
-  SERV_01.setTarget(120);
-
-  for (;;) {
-    SERV_01.update();
-    vTaskDelay(pdMS_TO_TICKS(50)); 
-  }
-}
-
 // FSM principal
 void TaskFSM(void *pvParameters) {
   (void) pvParameters;
@@ -172,7 +192,7 @@ void TaskFSM(void *pvParameters) {
   FSMEvent receivedEvent;
 
   for (;;) {
-    if (xQueueReceive(fsmQueue, &receivedEvent, portMAX_DELAY)) {
+    if (xQueueReceive(fsmQueue, &receivedEvent, pdMS_TO_TICKS(100))) {
       RobotState state = getState();
       
       switch (state) {
@@ -196,6 +216,7 @@ void TaskFSM(void *pvParameters) {
           if (receivedEvent == EVENT_OBSTACLE) {
             setState(OBSTACLE);
             Serial.println("Estado: OBSTACLE");
+            obstacleEntryTime = xTaskGetTickCount();
           } else if (receivedEvent == EVENT_LOW_BATTERY) {
             setState(LOW_BATTERY);
             Serial.println("Estado: LOW_BATTERY");
@@ -206,19 +227,70 @@ void TaskFSM(void *pvParameters) {
             SERV_01.setTarget(180); // Mover a 120 grados
             setState(IDLE);
             Serial.println("Estado: IDLE");
+          }else if (receivedEvent == EVENT_WEED_FOUND) {
+            // Detener la navegación
+            motorIzq.establecerSetpoint(0);
+            motorDer.establecerSetpoint(0);
+
+            // Iniciar el movimiento del brazo (función no bloqueante)
+            //brazoDelta.startMoveTo(posicionMaleza); // Asume que esta función retorna de inmediato
+            g_armCommand = CMD_MOVE_TO_TARGET;     
+            setState(MOVING_TO_WEED);
+            Serial.println("Estado: MOVING_TO_WEED");
           }
+          else if (receivedEvent == EVENT_RAKE_WEED_FOUND) {
+        // Solo inicia la secuencia si no está ya en progreso
+            if (!g_isRaking) {
+                Serial.println("RASTRILLO: Iniciando secuencia de rastrillado.");
+                g_isRaking = true;
+                g_rakeStartTime = xTaskGetTickCount();
+                SERV_04.setTarget(POS_TRABAJO_RASTRILLO); // Bajar el rastrillo
+            }
+          } 
           break;
 
-        case WEED_FOUND:
+        case MOVING_TO_WEED:
           // Detener motores y cambiar a actuación
           motorIzq.establecerSetpoint(0);
           motorDer.establecerSetpoint(0);
-          // Iniciar el movimiento del actuador (servo)
-          Serial.println("Comando: Mover servo a posición de ataque (120°)");
-          SERV_01.setTarget(30); // Mover a 120 grados
+          // El robot está esperando a que el brazo llegue.
+          // La tarea que controla el brazo delta deberá enviar este evento cuando termine.
+          if (receivedEvent == EVENT_ARM_AT_TARGET) {
+              // El brazo llegó, ahora encendemos el láser
+              Laser_01.on();
+              laserStartTime = xTaskGetTickCount(); // Inicia el temporizador del láser
+              setState(LASERING);
+              Serial.println("Estado: LASERING (2s)");
+          }
+          break;
+        
+        case LASERING:
+          // En este estado, no esperamos un evento, sino que el tiempo pase.
+          // Usamos la misma técnica no bloqueante que con el obstáculo.
+          // La comprobación se haría fuera del 'if (xQueueReceive...)'
+          // ... (ver lógica de temporizador más abajo)
           
-          //setState(ACTUATING);
-          Serial.println("Estado: ACTUATING");
+          // Podríamos también recibir un evento de finalización del temporizador
+          if (receivedEvent == EVENT_LASER_COMPLETE) {
+              Laser_01.off();
+              //brazoDelta.startReturnToHome(); // Inicia el movimiento de vuelta (no bloqueante)
+              g_armCommand = CMD_RETURN_HOME;
+              setState(RETURNING_HOME);
+              Serial.println("Estado: RETURNING_HOME");
+          }
+          break;
+
+        case RETURNING_HOME:
+          // Esperando a que el brazo vuelva a su posición inicial.
+          // La tarea del brazo delta enviará este evento.
+          if (receivedEvent == EVENT_ARM_AT_HOME) {
+              // Secuencia completada, volvemos a navegar
+              setState(NAVIGATING);
+              Serial.println("Estado: NAVIGATING (secuencia de actuacion finalizada)");
+              // Reactivar motores para navegar
+              //motorIzq.establecerSetpoint(VELOCIDAD_NORMAL);
+              //motorDer.establecerSetpoint(VELOCIDAD_NORMAL);
+          }
           break;
 
         case ACTUATING:
@@ -265,7 +337,55 @@ void TaskFSM(void *pvParameters) {
           break;
       }
     }
-    vTaskDelay(pdMS_TO_TICKS(50)); // Reducir delay para mejor respuesta
+    RobotState currentState = getState();
+    if (currentState == OBSTACLE) {
+      // Comprobar si han pasado 5 segundos desde que entramos en el estado
+      if ((xTaskGetTickCount() - obstacleEntryTime) >= pdMS_TO_TICKS(5000)) {
+        setState(NAVIGATING);
+        Serial.println("Estado: NAVIGATING (5s de espera finalizados)");
+        // Aquí podrías también reanudar la velocidad de los motores si es necesario
+        // motorIzq.establecerSetpoint(VELOCIDAD_ANTERIOR);
+        // motorDer.establecerSetpoint(VELOCIDAD_ANTERIOR);
+      }
+    }
+
+    if (currentState == LASERING) {
+        if ((xTaskGetTickCount() - laserStartTime) >= pdMS_TO_TICKS(2000)) {
+            // El tiempo ha pasado, enviamos un evento a nuestra propia cola
+            // para mantener la lógica de la FSM basada en eventos.
+            FSMEvent e = EVENT_LASER_COMPLETE;
+            xQueueSend(fsmQueue, &e, 0);
+        }
+    }
+
+    if (g_isRaking && (xTaskGetTickCount() - g_rakeStartTime >= pdMS_TO_TICKS(5000))) {
+            Serial.println("RASTRILLO: 5 segundos completados. Subiendo rastrillo.");
+            SERV_04.setTarget(POS_INICIAL_RASTRILLO); // Subir el rastrillo
+            g_isRaking = false; // Finalizar la secuencia
+    }
+    //vTaskDelay(pdMS_TO_TICKS(50)); // Reducir delay para mejor respuesta
+  }
+}
+
+
+void TaskServoControl(void *pvParameters) {
+  (void) pvParameters;
+
+  vTaskDelay(pdMS_TO_TICKS(1000)); 
+  
+  SERV_01.begin();
+  //SERV_01.setTarget(120);
+  SERV_02.begin();
+  SERV_03.begin();
+  SERV_04.begin();
+
+  for (;;) {
+    SERV_01.update();
+    SERV_02.update();
+    SERV_03.update();
+    SERV_04.update();
+
+    vTaskDelay(pdMS_TO_TICKS(50)); 
   }
 }
 
@@ -322,14 +442,16 @@ void TaskSensors(void *pvParameters) {
     float yaw = yawSensor.getYaw();
     //Serial.print("Yaw Angle [°]: ");
     //Serial.println(yaw, 2); // 2 decimales
-
+    
     for (int i = 0; i < NUM_SENSORES; i++) {
       if (sensores[i].distancia() < DISTANCIA_MINIMA) {
-          FSMEvent e = EVENT_OBSTACLE;
+          FSMEvent e = EVENT_RAKE_WEED_FOUND;
+          Serial.println(i);
           xQueueSend(fsmQueue, &e, 0);
           break;
       }
     }
+    
     vTaskDelayUntil(&lastWakeTime, delayTicks);
   }
 }
@@ -448,5 +570,51 @@ void TaskComms(void *pvParameters) {
     }
     
     vTaskDelay(pdMS_TO_TICKS(50)); // Reducir delay para mejor respuesta
+  }
+}
+
+void TaskSimulateArm(void *pvParameters) {
+  (void) pvParameters; // Evitar advertencia de parámetro no usado
+
+  FSMEvent eventToSend;
+
+  Serial.println("[SIM_ARM] Tarea de simulación de brazo iniciada.");
+
+  for (;;) {
+    // 1. Comprobar si hay un nuevo comando
+    if (g_armCommand != CMD_IDLE) {
+      
+      // 2. Procesar el comando recibido
+      switch (g_armCommand) {
+        
+        case CMD_MOVE_TO_TARGET:
+          Serial.println("[SIM_ARM] Comando recibido: Mover a objetivo. Simulando por 3s...");
+          vTaskDelay(pdMS_TO_TICKS(SIMULATED_MOVE_TIME_MS)); // Simulación no bloqueante
+          
+          Serial.println("[SIM_ARM] Simulación completada. Enviando EVENT_ARM_AT_TARGET.");
+          eventToSend = EVENT_ARM_AT_TARGET;
+          xQueueSend(fsmQueue, &eventToSend, 0);
+          break;
+
+        case CMD_RETURN_HOME:
+          Serial.println("[SIM_ARM] Comando recibido: Volver a casa. Simulando por 3s...");
+          vTaskDelay(pdMS_TO_TICKS(SIMULATED_MOVE_TIME_MS)); // Simulación no bloqueante
+
+          Serial.println("[SIM_ARM] Simulación completada. Enviando EVENT_ARM_AT_HOME.");
+          eventToSend = EVENT_ARM_AT_HOME;
+          xQueueSend(fsmQueue, &eventToSend, 0);
+          break;
+        
+        default:
+          // Comando desconocido, no hacer nada.
+          break;
+      }
+
+      // 3. Resetear el comando para no volver a ejecutarlo
+      g_armCommand = CMD_IDLE;
+    }
+
+    // Esperar un poco antes de volver a comprobar para no consumir el 100% de la CPU
+    vTaskDelay(pdMS_TO_TICKS(100));
   }
 }
