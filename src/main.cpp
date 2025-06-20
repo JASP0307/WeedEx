@@ -11,6 +11,8 @@
 #include "PinOut.h"
 #include "Laser.h"
 
+#define btSerial Serial1
+
 // Definición de estados
 enum RobotState {
   IDLE,
@@ -445,7 +447,7 @@ void TaskSensors(void *pvParameters) {
     
     for (int i = 0; i < NUM_SENSORES; i++) {
       if (sensores[i].distancia() < DISTANCIA_MINIMA) {
-          FSMEvent e = EVENT_RAKE_WEED_FOUND;
+          FSMEvent e = EVENT_WEED_FOUND;
           Serial.println(i);
           xQueueSend(fsmQueue, &e, 0);
           break;
@@ -568,7 +570,7 @@ void TaskComms(void *pvParameters) {
       Serial.println();
       lastHeartbeat = xTaskGetTickCount();
     }
-    
+
     vTaskDelay(pdMS_TO_TICKS(50)); // Reducir delay para mejor respuesta
   }
 }
@@ -616,5 +618,67 @@ void TaskSimulateArm(void *pvParameters) {
 
     // Esperar un poco antes de volver a comprobar para no consumir el 100% de la CPU
     vTaskDelay(pdMS_TO_TICKS(100));
+  }
+}
+
+void TaskBluetoothCommunication(void *pvParameters) {
+  (void) pvParameters;
+  String incomingString = ""; // Buffer para comandos entrantes
+  String lastSentState = "";  // Para no saturar el canal enviando el mismo estado
+
+  for (;;) {
+    // --- 1. Escuchar comandos entrantes desde el Celular (vía HC-05) ---
+    if (btSerial.available() > 0) {
+      char c = btSerial.read();
+      if (c == '\n') {
+        // Comando completo recibido
+        incomingString.trim(); 
+        
+        if (incomingString == "START") {
+          // Usamos el Serial principal para depuración en el Monitor Serie
+          Serial.println("DEBUG: Comando START recibido por Bluetooth");
+          FSMEvent e = EVENT_NAVIGATE;
+          xQueueSend(fsmQueue, &e, 0);
+        } else if (incomingString == "STOP") {
+          Serial.println("DEBUG: Comando STOP recibido por Bluetooth");
+          FSMEvent e = EVENT_STOP;
+          xQueueSend(fsmQueue, &e, 0);
+        }
+        
+        incomingString = ""; // Limpiar el buffer
+      } else {
+        incomingString += c;
+      }
+    }
+
+    // --- 2. Enviar estado actual al Celular ---
+    RobotState currentState = getState();
+    String stateStr = "STATE:" + robotStateToString(currentState); // Usa la misma función de ayuda
+
+    if (stateStr != lastSentState) {
+        // Enviar el estado al celular a través del HC-05
+        btSerial.println(stateStr);
+        // También lo imprimimos en el monitor serie para depurar
+        Serial.println("DEBUG: Enviando estado a Bluetooth -> " + stateStr);
+        lastSentState = stateStr;
+    }
+    
+    vTaskDelay(pdMS_TO_TICKS(100)); 
+  }
+}
+
+String robotStateToString(RobotState state) {
+  switch(state) {
+    
+    case IDLE: return "IDLE";
+    case NAVIGATING: return "NAVIGATING";
+    case MOVING_TO_WEED: return "MOVING_TO_WEED";
+    case LASERING: return "LASERING";
+    case RETURNING_HOME: return "RETURNING_HOME";
+    case ACTUATING: return "ACTUATING";
+    case ERROR_STATE: return "ERROR_STATE";
+    case LOW_BATTERY: return "LOW_BATTERY";
+    case OBSTACLE: return "OBSTACLE";
+    default: return "UNKNOWN";
   }
 }
