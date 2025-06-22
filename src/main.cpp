@@ -112,6 +112,7 @@ void TaskBattery(void *pvParameters);
 void TaskComms(void *pvParameters);
 void TaskServoControl(void *pvParameters);
 void TaskSimulateArm(void *pvParameters);
+void TaskBluetoothCommunication(void *pvParameters);
 
 // Funciones auxiliares
 RobotState getState();
@@ -119,6 +120,7 @@ void setState(RobotState newState);
 
 void setup() {
   Serial.begin(115200);
+  btSerial.begin(9600); 
   Serial.println("Iniciando sistema...");
   
   // Crear mutex para proteger estado
@@ -156,14 +158,15 @@ void setup() {
   Serial.println("Motores inicializados");
   
   // Crear tareas
-  xTaskCreate(TaskFSM,        "FSM",        512, NULL, 1, NULL);
-  xTaskCreate(TaskLocomotion, "Locomotion", 256, NULL, 2, NULL);
-  xTaskCreate(TaskActuation,  "Actuation",  128, NULL, 2, NULL);
-  xTaskCreate(TaskSensors,    "Sensors",    256, NULL, 2, NULL);
-  xTaskCreate(TaskBattery,    "Battery",    128, NULL, 2, NULL);
-  xTaskCreate(TaskComms,      "Comms",      256, NULL, 2, NULL);
-  xTaskCreate(TaskServoControl,  "ServoControl",  256, NULL, 1, NULL);
-  xTaskCreate(TaskSimulateArm, "Arm Sim Task", 256, NULL, 1, NULL);
+  xTaskCreate(TaskFSM,                    "FSM",        512, NULL, 1, NULL);
+  xTaskCreate(TaskLocomotion,             "Locomotion", 256, NULL, 2, NULL);
+  xTaskCreate(TaskActuation,              "Actuation",  128, NULL, 2, NULL);
+  xTaskCreate(TaskSensors,                "Sensors",    256, NULL, 2, NULL);
+  xTaskCreate(TaskBattery,                "Battery",    128, NULL, 2, NULL);
+  xTaskCreate(TaskComms,                  "Comms",      256, NULL, 2, NULL);
+  xTaskCreate(TaskServoControl,           "ServoControl",  256, NULL, 1, NULL);
+  xTaskCreate(TaskSimulateArm,            "Arm Sim Task", 256, NULL, 1, NULL);
+  xTaskCreate(TaskBluetoothCommunication, "Bluetooth", 512, NULL, 1, NULL);
 
   Serial.println("Tareas FreeRTOS creadas");
 }
@@ -448,7 +451,7 @@ void TaskSensors(void *pvParameters) {
     for (int i = 0; i < NUM_SENSORES; i++) {
       if (sensores[i].distancia() < DISTANCIA_MINIMA) {
           FSMEvent e = EVENT_WEED_FOUND;
-          Serial.println(i);
+          //Serial.println(i);
           xQueueSend(fsmQueue, &e, 0);
           break;
       }
@@ -621,33 +624,56 @@ void TaskSimulateArm(void *pvParameters) {
   }
 }
 
+String robotStateToString(RobotState state) {
+  switch(state) {
+    
+    case IDLE: return "IDLE";
+    case NAVIGATING: return "NAVIGATING";
+    case MOVING_TO_WEED: return "MOVING_TO_WEED";
+    case LASERING: return "LASERING";
+    case RETURNING_HOME: return "RETURNING_HOME";
+    case ACTUATING: return "ACTUATING";
+    case ERROR_STATE: return "ERROR_STATE";
+    case LOW_BATTERY: return "LOW_BATTERY";
+    case OBSTACLE: return "OBSTACLE";
+    default: return "UNKNOWN";
+  }
+}
+
 void TaskBluetoothCommunication(void *pvParameters) {
   (void) pvParameters;
   String incomingString = ""; // Buffer para comandos entrantes
   String lastSentState = "";  // Para no saturar el canal enviando el mismo estado
 
   for (;;) {
-    // --- 1. Escuchar comandos entrantes desde el Celular (vía HC-05) ---
+    // Comprobar si hay datos disponibles para leer desde el módulo Bluetooth
     if (btSerial.available() > 0) {
-      char c = btSerial.read();
-      if (c == '\n') {
-        // Comando completo recibido
-        incomingString.trim(); 
-        
+      // Leer el siguiente carácter
+      char incomingChar = btSerial.read();
+
+      // Si el carácter es un salto de línea, hemos recibido un comando completo
+      if (incomingChar == '\n') {
+        Serial.print("Mensaje completo recibido: '");
+        Serial.print(incomingString);
+        Serial.println("'");
+
+        // Comparar el mensaje recibido con el comando esperado
         if (incomingString == "START") {
-          // Usamos el Serial principal para depuración en el Monitor Serie
-          Serial.println("DEBUG: Comando START recibido por Bluetooth");
-          FSMEvent e = EVENT_NAVIGATE;
-          xQueueSend(fsmQueue, &e, 0);
-        } else if (incomingString == "STOP") {
-          Serial.println("DEBUG: Comando STOP recibido por Bluetooth");
-          FSMEvent e = EVENT_STOP;
-          xQueueSend(fsmQueue, &e, 0);
+          Serial.println("***********************************************");
+          Serial.println("¡Comando 'START' recibido por Bluetooth!");
+          Serial.println("***********************************************");
+        } else {
+          Serial.println("El mensaje recibido no es 'START'.");
         }
-        
-        incomingString = ""; // Limpiar el buffer
+
+        // Limpiar la variable para el próximo mensaje
+        incomingString = "";
       } else {
-        incomingString += c;
+        // Si no es un salto de línea, añadir el carácter al string
+        // Ignoramos el carácter de retorno de carro '\r' que algunas apps envían
+        if (incomingChar != '\r') {
+          incomingString += incomingChar;
+        }
       }
     }
 
@@ -664,21 +690,5 @@ void TaskBluetoothCommunication(void *pvParameters) {
     }
     
     vTaskDelay(pdMS_TO_TICKS(100)); 
-  }
-}
-
-String robotStateToString(RobotState state) {
-  switch(state) {
-    
-    case IDLE: return "IDLE";
-    case NAVIGATING: return "NAVIGATING";
-    case MOVING_TO_WEED: return "MOVING_TO_WEED";
-    case LASERING: return "LASERING";
-    case RETURNING_HOME: return "RETURNING_HOME";
-    case ACTUATING: return "ACTUATING";
-    case ERROR_STATE: return "ERROR_STATE";
-    case LOW_BATTERY: return "LOW_BATTERY";
-    case OBSTACLE: return "OBSTACLE";
-    default: return "UNKNOWN";
   }
 }
