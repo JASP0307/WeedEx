@@ -10,51 +10,13 @@
 #include "Ultrasonico.h"
 #include "PinOut.h"
 #include "Laser.h"
+#include "RobotDefinitions.h"
 
 #define btSerial Serial1
-
-// Definición de estados
-enum RobotState {
-  IDLE,
-  NAVIGATING,
-  MOVING_TO_WEED,
-  LASERING,
-  RETURNING_HOME,
-  ACTUATING,
-  ERROR_STATE,
-  LOW_BATTERY,
-  OBSTACLE
-};
-
-typedef enum {
-  EVENT_NONE,
-  EVENT_NAVIGATE,
-  EVENT_STOP,
-  EVENT_OBSTACLE,
-  EVENT_RAKE_WEED_FOUND,
-  EVENT_WEED_FOUND,   
-  EVENT_ARM_AT_TARGET,
-  EVENT_LASER_COMPLETE,
-  EVENT_ARM_AT_HOME,
-  EVENT_LOW_BATTERY,
-  EVENT_ERROR,
-  EVENT_RESUME
-} FSMEvent;
-
-enum ArmCommand {
-  CMD_IDLE,
-  CMD_MOVE_TO_TARGET,
-  CMD_RETURN_HOME
-};
-
-volatile ArmCommand g_armCommand = CMD_IDLE;
 
 // Handles globales
 QueueHandle_t fsmQueue;
 SemaphoreHandle_t stateMutex;
-
-// Estado protegido por mutex
-volatile RobotState currentState = IDLE;
 
 // Crear motores con pines de interrupción diferentes
 MotorModule motorIzq(Pinout::Locomocion::MotorIzquierdo::rPWM,
@@ -86,18 +48,16 @@ Ultrasonico UltrFront(Pinout::Sensores::Ultra_Front::TRIG, Pinout::Sensores::Ult
 Ultrasonico sensores[] = {UltrDer, UltrFront, UltrIzq}; 
 const int NUM_SENSORES = sizeof(sensores) / sizeof(sensores[0]);
 
-const int POS_INICIAL_RASTRILLO = 90; // Posición de reposo
-const int POS_TRABAJO_RASTRILLO = 10; // Posición para rastrillar
+
 
 // --- Variables para la gestión de la acción ---
-bool g_isRaking = false;
+
 TickType_t g_rakeStartTime = 0;
 
 Laser Laser_01(Pinout::Laser::Laser_1);
 
 // Tiempos de simulación en milisegundos
-const int SIMULATED_MOVE_TIME_MS = 3000;
-const uint8_t DISTANCIA_MINIMA = 40;
+
 TickType_t obstacleEntryTime = 0;
 TickType_t laserStartTime  = 0;
 

@@ -1,0 +1,72 @@
+#ifndef ROBOT_DEFINITIONS_H
+#define ROBOT_DEFINITIONS_H
+
+// Este archivo centraliza todas las definiciones lógicas, constantes de comportamiento,
+// y enumeraciones para la Máquina de Estados Finitos (FSM) del robot.
+
+// =================================================================
+// 1. ESTADOS DE LA MÁQUINA DE ESTADOS (FSM)
+// =================================================================
+enum RobotState {
+  IDLE,
+  NAVIGATING,
+  MOVING_TO_WEED,
+  LASERING,
+  RETURNING_HOME,
+  ACTUATING,
+  ERROR_STATE,
+  LOW_BATTERY,
+  OBSTACLE
+};
+
+// =================================================================
+// 2. EVENTOS DE LA MÁQUINA DE ESTADOS (FSM)
+// =================================================================
+typedef enum {
+  EVENT_NONE,
+  EVENT_NAVIGATE,
+  EVENT_STOP,
+  EVENT_OBSTACLE,
+  EVENT_RAKE_WEED_FOUND,
+  EVENT_WEED_FOUND,   
+  EVENT_ARM_AT_TARGET,
+  EVENT_LASER_COMPLETE,
+  EVENT_ARM_AT_HOME,
+  EVENT_LOW_BATTERY,
+  EVENT_ERROR,
+  EVENT_RESUME
+} FSMEvent;
+
+enum ArmCommand {
+  CMD_IDLE,
+  CMD_MOVE_TO_TARGET,
+  CMD_RETURN_HOME
+};
+
+// =================================================================
+// 3. CONSTANTES DE COMPORTAMIENTO
+// =================================================================
+
+// Estado protegido por mutex
+volatile RobotState currentState = IDLE;
+
+// --- Detección de Obstáculos ---
+const int DISTANCIA_MINIMA = 20; // Distancia en cm para detectar un obstáculo
+const int SIMULATED_MOVE_TIME_MS = 3000;
+
+// --- Tiempos de Espera (en milisegundos) ---
+const int OBSTACLE_WAIT_TIME_MS = 5000;
+const int LASER_ON_TIME_MS = 2000;
+const int RAKE_ACTION_TIME_MS = 5000;
+
+// --- Parámetros de Servos ---
+
+const int POS_INICIAL_RASTRILLO = 90; // Posición de reposo
+const int POS_TRABAJO_RASTRILLO = 10; // Posición para rastrillar
+
+// Puedes añadir más constantes aquí (velocidades de motor, etc.)
+volatile ArmCommand g_armCommand = CMD_IDLE;
+
+bool g_isRaking = false;
+
+#endif // ROBOT_DEFINITIONS_H
