@@ -73,10 +73,10 @@ MotorModule motorDer(Pinout::Locomocion::MotorDerecho::rPWM,
                      Pinout::Locomocion::MotorDerecho::ENC_B,
                      360, 50);
 
-ServoModule SERV_01(Pinout::BrazoDelta::SERVO_1);
-ServoModule SERV_02(Pinout::BrazoDelta::SERVO_2);
-ServoModule SERV_03(Pinout::BrazoDelta::SERVO_3);
-ServoModule SERV_04(Pinout::Rastrillos::SERVO_4);
+//ServoModule SERV_01(Pinout::BrazoDelta::SERVO_1);
+//ServoModule SERV_02(Pinout::BrazoDelta::SERVO_2);
+//ServoModule SERV_03(Pinout::BrazoDelta::SERVO_3);
+//ServoModule SERV_04(Pinout::Rastrillos::SERVO_4);
 
 YawSensor yawSensor;
 Ultrasonico UltrDer(Pinout::Sensores::Ultra_Der::TRIG, Pinout::Sensores::Ultra_Der::ECHO);
@@ -154,19 +154,19 @@ void setup() {
   // Activar control PID
   motorIzq.activarPID(true);
   motorDer.activarPID(true);
-  SERV_01.begin();
+  //SERV_01.begin();
   Serial.println("Motores inicializados");
   
   // Crear tareas
-  xTaskCreate(TaskFSM,                    "FSM",        512, NULL, 1, NULL);
+  xTaskCreate(TaskFSM,                    "FSM",        512, NULL, 3, NULL);
   xTaskCreate(TaskLocomotion,             "Locomotion", 256, NULL, 2, NULL);
   xTaskCreate(TaskActuation,              "Actuation",  128, NULL, 2, NULL);
   xTaskCreate(TaskSensors,                "Sensors",    256, NULL, 2, NULL);
   xTaskCreate(TaskBattery,                "Battery",    128, NULL, 2, NULL);
   xTaskCreate(TaskComms,                  "Comms",      256, NULL, 2, NULL);
   xTaskCreate(TaskServoControl,           "ServoControl",  256, NULL, 1, NULL);
-  xTaskCreate(TaskSimulateArm,            "Arm Sim Task", 256, NULL, 1, NULL);
-  xTaskCreate(TaskBluetoothCommunication, "Bluetooth", 512, NULL, 1, NULL);
+  xTaskCreate(TaskSimulateArm,            "Arm Sim Task", 256, NULL, 2, NULL);
+  xTaskCreate(TaskBluetoothCommunication, "Bluetooth Test Task", 2048, NULL, 2, NULL);
 
   Serial.println("Tareas FreeRTOS creadas");
 }
@@ -208,7 +208,7 @@ void TaskFSM(void *pvParameters) {
               motorIzq.activarPID(true);
               motorDer.activarPID(true);
             }
-            SERV_01.setTarget(30);
+            //SERV_01.setTarget(30);
             setState(NAVIGATING);
             Serial.println("Estado: NAVIGATING");
           } else if (receivedEvent == EVENT_LOW_BATTERY) {
@@ -229,7 +229,7 @@ void TaskFSM(void *pvParameters) {
             // Detener motores gradualmente
             motorIzq.establecerSetpoint(0);
             motorDer.establecerSetpoint(0);
-            SERV_01.setTarget(180); // Mover a 120 grados
+            //SERV_01.setTarget(180); // Mover a 120 grados
             setState(IDLE);
             Serial.println("Estado: IDLE");
           }else if (receivedEvent == EVENT_WEED_FOUND) {
@@ -249,7 +249,7 @@ void TaskFSM(void *pvParameters) {
                 Serial.println("RASTRILLO: Iniciando secuencia de rastrillado.");
                 g_isRaking = true;
                 g_rakeStartTime = xTaskGetTickCount();
-                SERV_04.setTarget(POS_TRABAJO_RASTRILLO); // Bajar el rastrillo
+                //SERV_04.setTarget(POS_TRABAJO_RASTRILLO); // Bajar el rastrillo
             }
           } 
           break;
@@ -365,7 +365,7 @@ void TaskFSM(void *pvParameters) {
 
     if (g_isRaking && (xTaskGetTickCount() - g_rakeStartTime >= pdMS_TO_TICKS(5000))) {
             Serial.println("RASTRILLO: 5 segundos completados. Subiendo rastrillo.");
-            SERV_04.setTarget(POS_INICIAL_RASTRILLO); // Subir el rastrillo
+            //SERV_04.setTarget(POS_INICIAL_RASTRILLO); // Subir el rastrillo
             g_isRaking = false; // Finalizar la secuencia
     }
     //vTaskDelay(pdMS_TO_TICKS(50)); // Reducir delay para mejor respuesta
@@ -378,18 +378,18 @@ void TaskServoControl(void *pvParameters) {
 
   vTaskDelay(pdMS_TO_TICKS(1000)); 
   
-  SERV_01.begin();
+  //SERV_01.begin();
   //SERV_01.setTarget(120);
-  SERV_02.begin();
-  SERV_03.begin();
-  SERV_04.begin();
+  //SERV_02.begin();
+  //SERV_03.begin();
+  //SERV_04.begin();
 
   for (;;) {
-    SERV_01.update();
-    SERV_02.update();
-    SERV_03.update();
-    SERV_04.update();
-
+    //SERV_01.update();
+    //SERV_02.update();
+    //SERV_03.update();
+    //SERV_04.update();
+//
     vTaskDelay(pdMS_TO_TICKS(50)); 
   }
 }
@@ -434,7 +434,7 @@ void TaskSensors(void *pvParameters) {
   (void) pvParameters;
   
   // Reducir el delay para mejor resolución temporal
-  const TickType_t delayTicks = pdMS_TO_TICKS(50); // 50ms en lugar de 500ms
+  const TickType_t delayTicks = pdMS_TO_TICKS(150); // 50ms en lugar de 500ms
   
   // Inicializar el sensor
   yawSensor.begin();
@@ -646,34 +646,27 @@ void TaskBluetoothCommunication(void *pvParameters) {
   String lastSentState = "";  // Para no saturar el canal enviando el mismo estado
 
   for (;;) {
-    // Comprobar si hay datos disponibles para leer desde el módulo Bluetooth
+    // --- 1. Escuchar comandos entrantes desde el Celular (vía HC-05) ---
     if (btSerial.available() > 0) {
-      // Leer el siguiente carácter
-      char incomingChar = btSerial.read();
-
-      // Si el carácter es un salto de línea, hemos recibido un comando completo
-      if (incomingChar == '\n') {
-        Serial.print("Mensaje completo recibido: '");
-        Serial.print(incomingString);
-        Serial.println("'");
-
-        // Comparar el mensaje recibido con el comando esperado
+      char c = btSerial.read();
+      if (c == '\n') {
+        // Comando completo recibido
+        incomingString.trim(); 
+        
         if (incomingString == "START") {
-          Serial.println("***********************************************");
-          Serial.println("¡Comando 'START' recibido por Bluetooth!");
-          Serial.println("***********************************************");
-        } else {
-          Serial.println("El mensaje recibido no es 'START'.");
+          // Usamos el Serial principal para depuración en el Monitor Serie
+          Serial.println("DEBUG: Comando START recibido por Bluetooth");
+          FSMEvent e = EVENT_NAVIGATE;
+          xQueueSend(fsmQueue, &e, 0);
+        } else if (incomingString == "STOP") {
+          Serial.println("DEBUG: Comando STOP recibido por Bluetooth");
+          FSMEvent e = EVENT_STOP;
+          xQueueSend(fsmQueue, &e, 0);
         }
-
-        // Limpiar la variable para el próximo mensaje
-        incomingString = "";
+        
+        incomingString = ""; // Limpiar el buffer
       } else {
-        // Si no es un salto de línea, añadir el carácter al string
-        // Ignoramos el carácter de retorno de carro '\r' que algunas apps envían
-        if (incomingChar != '\r') {
-          incomingString += incomingChar;
-        }
+        incomingString += c;
       }
     }
 
