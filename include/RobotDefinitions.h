@@ -49,6 +49,7 @@ enum ArmCommand {
 
 // Estado protegido por mutex
 volatile RobotState currentState = IDLE;
+float g_batteryVoltage = 0.0;
 
 // --- Detección de Obstáculos ---
 const int DISTANCIA_MINIMA = 20; // Distancia en cm para detectar un obstáculo

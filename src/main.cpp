@@ -18,6 +18,9 @@
 QueueHandle_t fsmQueue;
 SemaphoreHandle_t stateMutex;
 
+// Mutex para proteger el acceso a la variable del voltaje
+SemaphoreHandle_t batteryMutex;
+
 // Crear motores con pines de interrupción diferentes
 MotorModule motorIzq(Pinout::Locomocion::MotorIzquierdo::rPWM,
                      Pinout::Locomocion::MotorIzquierdo::lPWM,
@@ -97,6 +100,11 @@ void setup() {
     while (1);
   }
 
+  batteryMutex = xSemaphoreCreateMutex();
+  if (batteryMutex == NULL) {
+      Serial.println("Error: No se pudo crear el batteryMutex");
+  }
+
   pinMode(Pinout::TiraLED::LEDs, OUTPUT);
 
   // Inicializar motores
@@ -166,6 +174,16 @@ String robotStateToString(RobotState state) {
     case OBSTACLE: return "OBSTACLE";
     default: return "UNKNOWN";
   }
+}
+
+
+float getBatteryVoltage() {
+  float voltage;
+  if (xSemaphoreTake(batteryMutex, portMAX_DELAY)) {
+    voltage = g_batteryVoltage;
+    xSemaphoreGive(batteryMutex);
+  }
+  return voltage;
 }
 
 // FSM principal
@@ -472,8 +490,8 @@ void TaskBattery(void *pvParameters) {
     voltajePromedio /= NUM_LECTURAS;
     
     // Imprimir para depuración
-    Serial.print("Voltaje Batería: ");
-    Serial.println(voltajePromedio);
+    // Serial.print("Voltaje Batería: ");
+    // Serial.println(voltajePromedio);
 
     // 5. Comprobar si el voltaje es bajo y enviar evento a la FSM
     if (voltajePromedio < VOLTAJE_BATERIA_BAJA && voltajePromedio > 5.0) { // El > 5.0 evita falsos positivos al desconectar
@@ -481,10 +499,16 @@ void TaskBattery(void *pvParameters) {
         xQueueSend(fsmQueue, &e, 0); // Asume que fsmQueue es global
     }
 
+    if (xSemaphoreTake(batteryMutex, portMAX_DELAY)) {
+        g_batteryVoltage = voltajePromedio;
+        xSemaphoreGive(batteryMutex);
+    }
+
     // Comprobar el voltaje cada 2 segundos
     vTaskDelay(pdMS_TO_TICKS(2000));
   }
 }
+
 
 void TaskComms(void *pvParameters) {
   (void) pvParameters;
@@ -602,48 +626,56 @@ void TaskSimulateArm(void *pvParameters) {
   }
 }
 
+
 void TaskBluetoothCommunication(void *pvParameters) {
   (void) pvParameters;
-  String incomingString = ""; // Buffer para comandos entrantes
-  String lastSentState = "";  // Para no saturar el canal enviando el mismo estado
+  String incomingString = "";
+  
+  // Temporizador para enviar toda la telemetría a un intervalo fijo
+  uint32_t lastTelemetrySendTime = 0;
+  const uint32_t TELEMETRY_INTERVAL_MS = 1000; // Enviar todo cada 1 segundo
 
   for (;;) {
-    // --- 1. Escuchar comandos entrantes desde el Celular (vía HC-05) ---
+    // --- Parte 1: Escuchar comandos (sin cambios) ---
     if (btSerial.available() > 0) {
       char c = btSerial.read();
       if (c == '\n') {
-        // Comando completo recibido
         incomingString.trim(); 
-        
         if (incomingString == "START") {
-          // Usamos el Serial principal para depuración en el Monitor Serie
-          Serial.println("DEBUG: Comando START recibido por Bluetooth");
+          //Serial.println("DEBUG: Comando START recibido");
           FSMEvent e = EVENT_NAVIGATE;
           xQueueSend(fsmQueue, &e, 0);
         } else if (incomingString == "STOP") {
-          Serial.println("DEBUG: Comando STOP recibido por Bluetooth");
+          //Serial.println("DEBUG: Comando STOP recibido");
           FSMEvent e = EVENT_STOP;
           xQueueSend(fsmQueue, &e, 0);
         }
-        
-        incomingString = ""; // Limpiar el buffer
+        incomingString = "";
       } else {
         incomingString += c;
       }
     }
 
-    // --- 2. Enviar estado actual al Celular ---
-    RobotState currentState = getState();
+    // --- Parte 2: Construir y enviar el paquete de telemetría periódicamente ---
+    if (millis() - lastTelemetrySendTime > TELEMETRY_INTERVAL_MS) {
+      
+      RobotState currentState = getState();
+      float currentVoltage = getBatteryVoltage();
 
-    String stateStr = "STATE:" + robotStateToString(currentState); // Usa la misma función de ayuda
+      String stateStr = robotStateToString(currentState);
+      
+      char voltageBuffer[10]; // Buffer para convertir el float del voltaje
+      dtostrf(currentVoltage, 4, 2, voltageBuffer); // Formato: 4 caracteres en total, 2 decimales
+      String voltageStr = String(voltageBuffer);
 
-    if (stateStr != lastSentState) {
-        // Enviar el estado al celular a través del HC-05
-        btSerial.println(stateStr);
-        // También lo imprimimos en el monitor serie para depurar
-        Serial.println("DEBUG: Enviando estado a Bluetooth -> " + stateStr);
-        lastSentState = stateStr;
+      String telemetryPacket = "STATE:" + stateStr + ":BATT:" + voltageStr;
+
+      btSerial.println(telemetryPacket);
+      //Serial.println("DEBUG: Enviando Telemetría -> " + telemetryPacket);
+
+      lastTelemetrySendTime = millis();
     }
+
     vTaskDelay(pdMS_TO_TICKS(100)); 
   }
 }
