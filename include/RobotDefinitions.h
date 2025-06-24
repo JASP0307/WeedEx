@@ -64,6 +64,12 @@ const int RAKE_ACTION_TIME_MS = 5000;
 const int POS_INICIAL_RASTRILLO = 90; // Posición de reposo
 const int POS_TRABAJO_RASTRILLO = 10; // Posición para rastrillar
 
+// --- Parámetros de Divisor de Voltaje ---
+
+const float R1 = 21800.0; // 20k ohms
+const float R2 = 10000.0; // 10k ohms
+const float VOLTAJE_BATERIA_BAJA = 10.5;
+
 // Puedes añadir más constantes aquí (velocidades de motor, etc.)
 volatile ArmCommand g_armCommand = CMD_IDLE;
 

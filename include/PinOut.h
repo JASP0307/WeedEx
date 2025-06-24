@@ -56,6 +56,13 @@ namespace Pinout {
     }
 
     //================================================================
+    // SUBSISTEMA DE ACTUACICIÓN (LEDS])
+    //----------------------------------------------------------------
+    namespace TiraLED {
+        constexpr uint8_t LEDs = 36;
+    }
+
+    //================================================================
     // SUBSISTEMA DE SENSORES
     //----------------------------------------------------------------
     namespace Sensores {
@@ -83,6 +90,9 @@ namespace Pinout {
             constexpr uint8_t TRIG = 52;
             constexpr uint8_t ECHO = 50;
         }
-    }
 
+        namespace Battery {
+            constexpr uint8_t Battery = A0;
+        }
+    }
 } // Fin del namespace Pinout

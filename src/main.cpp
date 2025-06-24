@@ -66,7 +66,7 @@ TickType_t laserStartTime  = 0;
 // Prototipos de tareas
 void TaskFSM(void *pvParameters);
 void TaskLocomotion(void *pvParameters);
-void TaskActuation(void *pvParameters);
+//void TaskActuation(void *pvParameters);
 void TaskSensors(void *pvParameters);
 void TaskBattery(void *pvParameters);
 void TaskComms(void *pvParameters);
@@ -97,6 +97,8 @@ void setup() {
     while (1);
   }
 
+  pinMode(Pinout::TiraLED::LEDs, OUTPUT);
+
   // Inicializar motores
   Serial.println("Inicializando motores...");
   
@@ -120,7 +122,7 @@ void setup() {
   // Crear tareas
   xTaskCreate(TaskFSM,                    "FSM",        512, NULL, 3, NULL);
   xTaskCreate(TaskLocomotion,             "Locomotion", 256, NULL, 2, NULL);
-  xTaskCreate(TaskActuation,              "Actuation",  128, NULL, 2, NULL);
+  //xTaskCreate(TaskActuation,              "Actuation",  128, NULL, 2, NULL);
   xTaskCreate(TaskSensors,                "Sensors",    256, NULL, 2, NULL);
   xTaskCreate(TaskBattery,                "Battery",    128, NULL, 2, NULL);
   xTaskCreate(TaskComms,                  "Comms",      256, NULL, 2, NULL);
@@ -150,6 +152,22 @@ void setState(RobotState newState) {
   }
 }
 
+String robotStateToString(RobotState state) {
+  switch(state) {
+    
+    case IDLE: return "IDLE";
+    case NAVIGATING: return "NAVIGATING";
+    case MOVING_TO_WEED: return "MOVING_TO_WEED";
+    case LASERING: return "LASERING";
+    case RETURNING_HOME: return "RETURNING_HOME";
+    case ACTUATING: return "ACTUATING";
+    case ERROR_STATE: return "ERROR_STATE";
+    case LOW_BATTERY: return "LOW_BATTERY";
+    case OBSTACLE: return "OBSTACLE";
+    default: return "UNKNOWN";
+  }
+}
+
 // FSM principal
 void TaskFSM(void *pvParameters) {
   (void) pvParameters;
@@ -168,6 +186,7 @@ void TaskFSM(void *pvParameters) {
               motorIzq.activarPID(true);
               motorDer.activarPID(true);
             }
+            digitalWrite(Pinout::TiraLED::LEDs, HIGH);
             //SERV_01.setTarget(30);
             setState(NAVIGATING);
             Serial.println("Estado: NAVIGATING");
@@ -181,6 +200,7 @@ void TaskFSM(void *pvParameters) {
           if (receivedEvent == EVENT_OBSTACLE) {
             setState(OBSTACLE);
             Serial.println("Estado: OBSTACLE");
+            digitalWrite(Pinout::TiraLED::LEDs, LOW);
             obstacleEntryTime = xTaskGetTickCount();
           } else if (receivedEvent == EVENT_LOW_BATTERY) {
             setState(LOW_BATTERY);
@@ -189,6 +209,7 @@ void TaskFSM(void *pvParameters) {
             // Detener motores gradualmente
             motorIzq.establecerSetpoint(0);
             motorDer.establecerSetpoint(0);
+            digitalWrite(Pinout::TiraLED::LEDs, LOW);
             //SERV_01.setTarget(180); // Mover a 120 grados
             setState(IDLE);
             Serial.println("Estado: IDLE");
@@ -196,7 +217,7 @@ void TaskFSM(void *pvParameters) {
             // Detener la navegación
             motorIzq.establecerSetpoint(0);
             motorDer.establecerSetpoint(0);
-
+            
             // Iniciar el movimiento del brazo (función no bloqueante)
             //brazoDelta.startMoveTo(posicionMaleza); // Asume que esta función retorna de inmediato
             g_armCommand = CMD_MOVE_TO_TARGET;     
@@ -332,7 +353,6 @@ void TaskFSM(void *pvParameters) {
   }
 }
 
-
 void TaskServoControl(void *pvParameters) {
   (void) pvParameters;
 
@@ -380,16 +400,6 @@ void TaskLocomotion(void *pvParameters) {
   }
 }
 
-void TaskActuation(void *pvParameters) {
-  (void) pvParameters;
-  
-  for (;;) {
-    // Activar pistón o láser si se requiere
-    // TODO: Implementar control de actuadores
-    vTaskDelay(pdMS_TO_TICKS(100));
-  }
-}
-
 void TaskSensors(void *pvParameters) {
   (void) pvParameters;
   
@@ -424,18 +434,55 @@ void TaskSensors(void *pvParameters) {
 void TaskBattery(void *pvParameters) {
   (void) pvParameters;
   
+  const int NUM_LECTURAS = 10;
+  float lecturas[NUM_LECTURAS];
+  int indiceLectura = 0;
+
+  // --- Inicialización del Buffer (CORRECCIÓN) ---
+  // Para evitar falsos positivos de batería baja al inicio, "cebamos" el
+  // buffer con la primera lectura real antes de empezar el bucle principal.
+  vTaskDelay(pdMS_TO_TICKS(100)); // Pequeña pausa para estabilizar el ADC
+  
+  int valorInicial = analogRead(Pinout::Sensores::Battery::Battery);
+  float voltajePinInicial = (valorInicial / 1023.0) * 5.0;
+  float voltajeBateriaInicial = voltajePinInicial * ((R1 + R2) / R2);
+  
+  // Llenar todo el array con esta primera lectura realista
+  for (int i = 0; i < NUM_LECTURAS; i++) {
+    lecturas[i] = voltajeBateriaInicial;
+  }
   for (;;) {
-    // Leer voltaje y chequear estado
-    // TODO: Implementar monitoreo de batería
+    // 1. Leer el valor crudo del pin analógico (0-1023)
+    int valorSensor = analogRead(Pinout::Sensores::Battery::Battery);
+
+    float voltajePin = (valorSensor / 1023.0) * 5.0;
+
+    float voltajeBateria = voltajePin * ((R1 + R2) / R2);
+
+    lecturas[indiceLectura] = voltajeBateria;
+    indiceLectura++;
+    if (indiceLectura >= NUM_LECTURAS) {
+      indiceLectura = 0;
+    }
+
+    float voltajePromedio = 0;
+    for (int i = 0; i < NUM_LECTURAS; i++) {
+      voltajePromedio += lecturas[i];
+    }
+    voltajePromedio /= NUM_LECTURAS;
     
-    // Ejemplo:
-    // float voltaje = analogRead(PIN_BATERIA) * (5.0/1023.0) * FACTOR_DIVISION;
-    // if (voltaje < VOLTAJE_MINIMO) {
-    //     FSMEvent e = EVENT_LOW_BATTERY;
-    //     xQueueSend(fsmQueue, &e, 0);
-    // }
-    
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    // Imprimir para depuración
+    Serial.print("Voltaje Batería: ");
+    Serial.println(voltajePromedio);
+
+    // 5. Comprobar si el voltaje es bajo y enviar evento a la FSM
+    if (voltajePromedio < VOLTAJE_BATERIA_BAJA && voltajePromedio > 5.0) { // El > 5.0 evita falsos positivos al desconectar
+        FSMEvent e = EVENT_LOW_BATTERY;
+        xQueueSend(fsmQueue, &e, 0); // Asume que fsmQueue es global
+    }
+
+    // Comprobar el voltaje cada 2 segundos
+    vTaskDelay(pdMS_TO_TICKS(2000));
   }
 }
 
@@ -488,35 +535,6 @@ void TaskComms(void *pvParameters) {
         } else {
           Serial.println("ERROR,SPEED_FORMAT");
         }
-      }
-      else if (msg.startsWith("CMD,PID,")) {
-        // Formato: CMD,PID,KP,KI,KD
-        int firstComma = msg.indexOf(',', 8);
-        int secondComma = msg.indexOf(',', firstComma + 1);
-        int thirdComma = msg.indexOf(',', secondComma + 1);
-        
-        if (firstComma > 8 && secondComma > firstComma && thirdComma > secondComma) {
-          float kp = msg.substring(8, firstComma).toFloat();
-          float ki = msg.substring(firstComma + 1, secondComma).toFloat();
-          float kd = msg.substring(secondComma + 1, thirdComma).toFloat();
-          
-          motorIzq.configurarPID(kp, ki, kd);
-          motorDer.configurarPID(kp, ki, kd);
-          
-          Serial.println("ACK,PID");
-        } else {
-          Serial.println("ERROR,PID_FORMAT");
-        }
-      }
-      else if (msg.equals("CMD,STATUS")) {
-        // Enviar estado detallado
-        RobotState state = getState();
-        Serial.print("STATUS,");
-        Serial.print(state);
-        Serial.print(",L:");
-        Serial.print(motorIzq.obtenerVelocidadActual());
-        Serial.print(",R:");
-        Serial.println(motorDer.obtenerVelocidadActual());
       }
       else {
         Serial.println("ERROR,UNKNOWN_CMD");
@@ -584,22 +602,6 @@ void TaskSimulateArm(void *pvParameters) {
   }
 }
 
-String robotStateToString(RobotState state) {
-  switch(state) {
-    
-    case IDLE: return "IDLE";
-    case NAVIGATING: return "NAVIGATING";
-    case MOVING_TO_WEED: return "MOVING_TO_WEED";
-    case LASERING: return "LASERING";
-    case RETURNING_HOME: return "RETURNING_HOME";
-    case ACTUATING: return "ACTUATING";
-    case ERROR_STATE: return "ERROR_STATE";
-    case LOW_BATTERY: return "LOW_BATTERY";
-    case OBSTACLE: return "OBSTACLE";
-    default: return "UNKNOWN";
-  }
-}
-
 void TaskBluetoothCommunication(void *pvParameters) {
   (void) pvParameters;
   String incomingString = ""; // Buffer para comandos entrantes
@@ -632,6 +634,7 @@ void TaskBluetoothCommunication(void *pvParameters) {
 
     // --- 2. Enviar estado actual al Celular ---
     RobotState currentState = getState();
+
     String stateStr = "STATE:" + robotStateToString(currentState); // Usa la misma función de ayuda
 
     if (stateStr != lastSentState) {
@@ -641,7 +644,6 @@ void TaskBluetoothCommunication(void *pvParameters) {
         Serial.println("DEBUG: Enviando estado a Bluetooth -> " + stateStr);
         lastSentState = stateStr;
     }
-    
     vTaskDelay(pdMS_TO_TICKS(100)); 
   }
 }
