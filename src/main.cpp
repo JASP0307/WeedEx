@@ -51,8 +51,6 @@ Ultrasonico UltrFront(Pinout::Sensores::Ultra_Front::TRIG, Pinout::Sensores::Ult
 Ultrasonico sensores[] = {UltrDer, UltrFront, UltrIzq}; 
 const int NUM_SENSORES = sizeof(sensores) / sizeof(sensores[0]);
 
-
-
 // --- Variables para la gestión de la acción ---
 
 TickType_t g_rakeStartTime = 0;
@@ -63,8 +61,6 @@ Laser Laser_01(Pinout::Laser::Laser_1);
 
 TickType_t obstacleEntryTime = 0;
 TickType_t laserStartTime  = 0;
-
-
 
 // Prototipos de tareas
 void TaskFSM(void *pvParameters);
@@ -92,7 +88,7 @@ void setup() {
     Serial.println("Error: No se pudo crear mutex de estado.");
     while (1);
   }
-  
+
   // Crear cola FSM
   fsmQueue = xQueueCreate(10, sizeof(FSMEvent));
   if (fsmQueue == NULL) {
@@ -103,6 +99,11 @@ void setup() {
   batteryMutex = xSemaphoreCreateMutex();
   if (batteryMutex == NULL) {
       Serial.println("Error: No se pudo crear el batteryMutex");
+  }
+
+  locomotionMutex = xSemaphoreCreateMutex();
+  if (locomotionMutex == NULL) {
+      Serial.println("Error: No se pudo crear el locomotionMutex");
   }
 
   pinMode(Pinout::TiraLED::LEDs, OUTPUT);
@@ -176,7 +177,6 @@ String robotStateToString(RobotState state) {
   }
 }
 
-
 float getBatteryVoltage() {
   float voltage;
   if (xSemaphoreTake(batteryMutex, portMAX_DELAY)) {
@@ -184,6 +184,20 @@ float getBatteryVoltage() {
     xSemaphoreGive(batteryMutex);
   }
   return voltage;
+}
+
+void setTargetYaw(float newYaw) {
+  if (xSemaphoreTake(locomotionMutex, portMAX_DELAY)) {
+    g_targetYaw = newYaw;
+    xSemaphoreGive(locomotionMutex);
+  }
+}
+
+void setBaseSpeed(float newSpeed) {
+  if (xSemaphoreTake(locomotionMutex, portMAX_DELAY)) {
+    g_baseSpeedRPM = newSpeed;
+    xSemaphoreGive(locomotionMutex);
+  }
 }
 
 // FSM principal
@@ -205,11 +219,14 @@ void TaskFSM(void *pvParameters) {
               motorDer.activarPID(true);
             }
             digitalWrite(Pinout::TiraLED::LEDs, HIGH);
+            motorIzq.establecerSetpoint(20);
+            motorDer.establecerSetpoint(20);
             //SERV_01.setTarget(30);
             setState(NAVIGATING);
             Serial.println("Estado: NAVIGATING");
           } else if (receivedEvent == EVENT_LOW_BATTERY) {
             setState(LOW_BATTERY);
+            digitalWrite(Pinout::TiraLED::LEDs, LOW);
             Serial.println("Estado: LOW_BATTERY");
           }
           break;
@@ -223,6 +240,7 @@ void TaskFSM(void *pvParameters) {
           } else if (receivedEvent == EVENT_LOW_BATTERY) {
             setState(LOW_BATTERY);
             Serial.println("Estado: LOW_BATTERY");
+            digitalWrite(Pinout::TiraLED::LEDs, LOW);
           } else if (receivedEvent == EVENT_STOP) {
             // Detener motores gradualmente
             motorIzq.establecerSetpoint(0);
@@ -265,6 +283,10 @@ void TaskFSM(void *pvParameters) {
               laserStartTime = xTaskGetTickCount(); // Inicia el temporizador del láser
               setState(LASERING);
               Serial.println("Estado: LASERING (2s)");
+          } else if (receivedEvent == EVENT_LOW_BATTERY) {
+            setState(LOW_BATTERY);
+            Serial.println("Estado: LOW_BATTERY");
+            digitalWrite(Pinout::TiraLED::LEDs, LOW);
           }
           break;
         
@@ -281,6 +303,10 @@ void TaskFSM(void *pvParameters) {
               g_armCommand = CMD_RETURN_HOME;
               setState(RETURNING_HOME);
               Serial.println("Estado: RETURNING_HOME");
+          } else if (receivedEvent == EVENT_LOW_BATTERY) {
+            setState(LOW_BATTERY);
+            Serial.println("Estado: LOW_BATTERY");
+            digitalWrite(Pinout::TiraLED::LEDs, LOW);
           }
           break;
 
@@ -294,6 +320,10 @@ void TaskFSM(void *pvParameters) {
               // Reactivar motores para navegar
               //motorIzq.establecerSetpoint(VELOCIDAD_NORMAL);
               //motorDer.establecerSetpoint(VELOCIDAD_NORMAL);
+          } else if (receivedEvent == EVENT_LOW_BATTERY) {
+            setState(LOW_BATTERY);
+            Serial.println("Estado: LOW_BATTERY");
+            digitalWrite(Pinout::TiraLED::LEDs, LOW);
           }
           break;
 
@@ -332,11 +362,17 @@ void TaskFSM(void *pvParameters) {
           motorIzq.establecerSetpoint(0);
           motorDer.establecerSetpoint(0);
           if (receivedEvent == EVENT_RESUME) {
+            motorIzq.establecerSetpoint(10);
+            motorDer.establecerSetpoint(10);
             setState(NAVIGATING);
             Serial.println("Estado: NAVIGATING (obstáculo evitado)");
           } else if (receivedEvent == EVENT_ERROR) {
             setState(ERROR_STATE);
             Serial.println("Estado: ERROR_STATE");
+          } else if (receivedEvent == EVENT_LOW_BATTERY) {
+            setState(LOW_BATTERY);
+            Serial.println("Estado: LOW_BATTERY");
+            digitalWrite(Pinout::TiraLED::LEDs, LOW);
           }
           break;
       }
@@ -438,9 +474,24 @@ void TaskSensors(void *pvParameters) {
     
     for (int i = 0; i < NUM_SENSORES; i++) {
       if (sensores[i].distancia() < DISTANCIA_MINIMA) {
-          FSMEvent e = EVENT_WEED_FOUND;
-          //Serial.println(i);
-          xQueueSend(fsmQueue, &e, 0);
+          //FSMEvent e = EVENT_OBSTACLE;
+          
+          
+          
+          
+          
+          
+          
+          
+          
+          
+          
+          
+          
+          
+          //
+          Serial.println(i);
+          //xQueueSend(fsmQueue, &e, 0);
           break;
       }
     }
@@ -508,7 +559,6 @@ void TaskBattery(void *pvParameters) {
     vTaskDelay(pdMS_TO_TICKS(2000));
   }
 }
-
 
 void TaskComms(void *pvParameters) {
   (void) pvParameters;
@@ -625,7 +675,6 @@ void TaskSimulateArm(void *pvParameters) {
     vTaskDelay(pdMS_TO_TICKS(100));
   }
 }
-
 
 void TaskBluetoothCommunication(void *pvParameters) {
   (void) pvParameters;

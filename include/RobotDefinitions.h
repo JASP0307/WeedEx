@@ -76,4 +76,9 @@ volatile ArmCommand g_armCommand = CMD_IDLE;
 
 bool g_isRaking = false;
 
+float g_targetYaw = 0.0;      // Rumbo deseado (ej. 0.0 para ir al Norte)
+float g_baseSpeedRPM = 30.0;  // Velocidad base de los motores en RPM
+SemaphoreHandle_t locomotionMutex;
+
+
 #endif // ROBOT_DEFINITIONS_H
