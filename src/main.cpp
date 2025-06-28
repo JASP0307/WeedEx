@@ -219,8 +219,8 @@ void TaskFSM(void *pvParameters) {
               motorDer.activarPID(true);
             }
             digitalWrite(Pinout::TiraLED::LEDs, HIGH);
-            motorIzq.establecerSetpoint(20);
-            motorDer.establecerSetpoint(20);
+            //motorIzq.establecerSetpoint(20);
+            //motorDer.establecerSetpoint(20);
             //SERV_01.setTarget(30);
             setState(NAVIGATING);
             Serial.println("Estado: NAVIGATING");
@@ -428,29 +428,55 @@ void TaskServoControl(void *pvParameters) {
   }
 }
 
+// --- DECLARACIONES PARA LA TAREA PID ---
+float integralError = 0.0;
+float previousError = 0.0;
+
 void TaskLocomotion(void *pvParameters) {
   (void) pvParameters;
-  
   TickType_t xLastWakeTime = xTaskGetTickCount();
-  
+  const TickType_t xFrequency = pdMS_TO_TICKS(20);
+
   for (;;) {
-    // Actualizar ambos motores
-    bool izqActualizado = motorIzq.actualizar();
-    bool derActualizado = motorDer.actualizar();
-    /*
-    // Imprimir datos solo si algún motor se actualizó
-    if (izqActualizado || derActualizado) {
-      // Formato: MotorID,Setpoint,RPM,PWM
-      if (izqActualizado) {
-        //motorIzq.imprimirCSV();
+    if (getState() == NAVIGATING) {
+      float currentYaw = yawSensor.getYaw();
+      float targetYaw;
+      float baseSpeedRPM;
+      
+      if (xSemaphoreTake(locomotionMutex, portMAX_DELAY)) {
+        targetYaw = g_targetYaw;
+        baseSpeedRPM = g_baseSpeedRPM;
+        xSemaphoreGive(locomotionMutex);
       }
-      if (derActualizado) {
-        //motorDer.imprimirCSV();
-      }
+
+      float headingError = targetYaw - currentYaw;
+      if (headingError > 180.0) headingError -= 360.0;
+      else if (headingError < -180.0) headingError += 360.0;
+
+      integralError += headingError;
+      if (integralError > 100.0) integralError = 100.0;
+      else if (integralError < -100.0) integralError = -100.0;
+
+      float derivativeError = headingError - previousError;
+      previousError = headingError;
+
+      float pidCorrection = (Kp_heading * headingError) + (Ki_heading * integralError) + (Kd_heading * derivativeError);
+      float leftSetpoint = baseSpeedRPM - pidCorrection;
+      float rightSetpoint = baseSpeedRPM + pidCorrection;
+
+      //motorIzq.establecerSetpoint(leftSetpoint);
+      //motorDer.establecerSetpoint(rightSetpoint);
+    } else {
+      motorIzq.establecerSetpoint(0);
+      motorDer.establecerSetpoint(0);
+      integralError = 0.0;
+      previousError = 0.0;
     }
-    */
-    // Usar vTaskDelayUntil para mantener frecuencia constante
-    vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(20)); // 50Hz
+    
+    motorIzq.actualizar();
+    motorDer.actualizar();
+    
+    vTaskDelayUntil(&xLastWakeTime, xFrequency);  
   }
 }
 
@@ -475,27 +501,10 @@ void TaskSensors(void *pvParameters) {
     for (int i = 0; i < NUM_SENSORES; i++) {
       if (sensores[i].distancia() < DISTANCIA_MINIMA) {
           //FSMEvent e = EVENT_OBSTACLE;
-          
-          
-          
-          
-          
-          
-          
-          
-          
-          
-          
-          
-          
-          
-          //
-          Serial.println(i);
           //xQueueSend(fsmQueue, &e, 0);
           break;
       }
     }
-    
     vTaskDelayUntil(&lastWakeTime, delayTicks);
   }
 }
@@ -507,9 +516,6 @@ void TaskBattery(void *pvParameters) {
   float lecturas[NUM_LECTURAS];
   int indiceLectura = 0;
 
-  // --- Inicialización del Buffer (CORRECCIÓN) ---
-  // Para evitar falsos positivos de batería baja al inicio, "cebamos" el
-  // buffer con la primera lectura real antes de empezar el bucle principal.
   vTaskDelay(pdMS_TO_TICKS(100)); // Pequeña pausa para estabilizar el ADC
   
   int valorInicial = analogRead(Pinout::Sensores::Battery::Battery);
@@ -539,15 +545,11 @@ void TaskBattery(void *pvParameters) {
       voltajePromedio += lecturas[i];
     }
     voltajePromedio /= NUM_LECTURAS;
-    
-    // Imprimir para depuración
-    // Serial.print("Voltaje Batería: ");
-    // Serial.println(voltajePromedio);
 
-    // 5. Comprobar si el voltaje es bajo y enviar evento a la FSM
+
     if (voltajePromedio < VOLTAJE_BATERIA_BAJA && voltajePromedio > 5.0) { // El > 5.0 evita falsos positivos al desconectar
         FSMEvent e = EVENT_LOW_BATTERY;
-        xQueueSend(fsmQueue, &e, 0); // Asume que fsmQueue es global
+        xQueueSend(fsmQueue, &e, 0);
     }
 
     if (xSemaphoreTake(batteryMutex, portMAX_DELAY)) {
@@ -698,6 +700,13 @@ void TaskBluetoothCommunication(void *pvParameters) {
           //Serial.println("DEBUG: Comando STOP recibido");
           FSMEvent e = EVENT_STOP;
           xQueueSend(fsmQueue, &e, 0);
+        } else if (incomingString.startsWith("YAW:")) {
+          // Extraer el valor después de "YAW:"
+          String yawValueStr = incomingString.substring(4); // 4 es la longitud de "YAW:"
+          float newYaw = yawValueStr.toFloat();
+          setTargetYaw(newYaw); // Llamar a nuestra función segura
+          Serial.print("DEBUG: Nuevo Yaw Objetivo establecido a -> ");
+          Serial.println(newYaw);
         }
         incomingString = "";
       } else {

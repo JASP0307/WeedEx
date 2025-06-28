@@ -81,4 +81,9 @@ float g_baseSpeedRPM = 30.0;  // Velocidad base de los motores en RPM
 SemaphoreHandle_t locomotionMutex;
 
 
+// --- CONSTANTES DE AJUSTE DEL PID (TUNING) ---
+const float Kp_heading = 0.5;
+const float Ki_heading = 0.0;
+const float Kd_heading = 0.0;
+
 #endif // ROBOT_DEFINITIONS_H
