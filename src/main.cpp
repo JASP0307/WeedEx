@@ -65,7 +65,7 @@ TickType_t laserStartTime  = 0;
 // Prototipos de tareas
 void TaskFSM(void *pvParameters);
 void TaskLocomotion(void *pvParameters);
-//void TaskActuation(void *pvParameters);
+
 void TaskSensors(void *pvParameters);
 void TaskBattery(void *pvParameters);
 void TaskComms(void *pvParameters);
@@ -130,8 +130,7 @@ void setup() {
   
   // Crear tareas
   xTaskCreate(TaskFSM,                    "FSM",        512, NULL, 3, NULL);
-  xTaskCreate(TaskLocomotion,             "Locomotion", 256, NULL, 2, NULL);
-  //xTaskCreate(TaskActuation,              "Actuation",  128, NULL, 2, NULL);
+  xTaskCreate(TaskLocomotion,             "Locomotion", 256, NULL, 1, NULL);
   xTaskCreate(TaskSensors,                "Sensors",    256, NULL, 2, NULL);
   xTaskCreate(TaskBattery,                "Battery",    128, NULL, 2, NULL);
   xTaskCreate(TaskComms,                  "Comms",      256, NULL, 2, NULL);
@@ -219,8 +218,8 @@ void TaskFSM(void *pvParameters) {
               motorDer.activarPID(true);
             }
             digitalWrite(Pinout::TiraLED::LEDs, HIGH);
-            //motorIzq.establecerSetpoint(20);
-            //motorDer.establecerSetpoint(20);
+            //motorIzq.establecerSetpoint(30);
+            //motorDer.establecerSetpoint(30);
             //SERV_01.setTarget(30);
             setState(NAVIGATING);
             Serial.println("Estado: NAVIGATING");
@@ -463,9 +462,12 @@ void TaskLocomotion(void *pvParameters) {
       float pidCorrection = (Kp_heading * headingError) + (Ki_heading * integralError) + (Kd_heading * derivativeError);
       float leftSetpoint = baseSpeedRPM - pidCorrection;
       float rightSetpoint = baseSpeedRPM + pidCorrection;
-
+      Serial.print(leftSetpoint);
+      Serial.print(" | ");
+      Serial.println(rightSetpoint);
+      
       //motorIzq.establecerSetpoint(leftSetpoint);
-      //motorDer.establecerSetpoint(rightSetpoint);
+      //motorDer.establecerSetpoint(-rightSetpoint);
     } else {
       motorIzq.establecerSetpoint(0);
       motorDer.establecerSetpoint(0);
@@ -480,24 +482,34 @@ void TaskLocomotion(void *pvParameters) {
   }
 }
 
+
 void TaskSensors(void *pvParameters) {
   (void) pvParameters;
   
   // Reducir el delay para mejor resolución temporal
-  const TickType_t delayTicks = pdMS_TO_TICKS(150); // 50ms en lugar de 500ms
+  //const TickType_t delayTicks = pdMS_TO_TICKS(10); // 50ms en lugar de 500ms
   
   // Inicializar el sensor
   yawSensor.begin();
   
+  const int DELAY_MS = 20; // 100 Hz
+  const TickType_t delayTicks = pdMS_TO_TICKS(DELAY_MS);
+  const float DELAY_SEC = DELAY_MS / 1000.0;
+  Serial.print("DEBUG: DELAY_SEC calculado es: ");
+  Serial.println(DELAY_SEC, 4); 
   TickType_t lastWakeTime = xTaskGetTickCount();
-  
+  unsigned long lastPrintTime = 0;
   for (;;) {
-    yawSensor.update();
+    yawSensor.update(DELAY_SEC);
     
     float yaw = yawSensor.getYaw();
-    //Serial.print("Yaw Angle [°]: ");
-    //Serial.println(yaw, 2); // 2 decimales
-    
+    unsigned long now = millis();
+    if (now - lastPrintTime > 250) {
+      float yaw = yawSensor.getYaw();
+      //Serial.print("Yaw Angle [°]: ");
+      //Serial.println(yaw, 2);
+      lastPrintTime = now;
+    }/*
     for (int i = 0; i < NUM_SENSORES; i++) {
       if (sensores[i].distancia() < DISTANCIA_MINIMA) {
           //FSMEvent e = EVENT_OBSTACLE;
@@ -505,9 +517,11 @@ void TaskSensors(void *pvParameters) {
           break;
       }
     }
+  */
     vTaskDelayUntil(&lastWakeTime, delayTicks);
   }
 }
+
 
 void TaskBattery(void *pvParameters) {
   (void) pvParameters;
@@ -557,8 +571,8 @@ void TaskBattery(void *pvParameters) {
         xSemaphoreGive(batteryMutex);
     }
 
-    // Comprobar el voltaje cada 2 segundos
-    vTaskDelay(pdMS_TO_TICKS(2000));
+    // Comprobar el voltaje cada 5 segundos
+    vTaskDelay(pdMS_TO_TICKS(5000));
   }
 }
 
@@ -628,7 +642,7 @@ void TaskComms(void *pvParameters) {
       lastHeartbeat = xTaskGetTickCount();
     }
 
-    vTaskDelay(pdMS_TO_TICKS(50)); // Reducir delay para mejor respuesta
+    vTaskDelay(pdMS_TO_TICKS(100)); // Reducir delay para mejor respuesta
   }
 }
 
@@ -674,7 +688,7 @@ void TaskSimulateArm(void *pvParameters) {
     }
 
     // Esperar un poco antes de volver a comprobar para no consumir el 100% de la CPU
-    vTaskDelay(pdMS_TO_TICKS(100));
+    vTaskDelay(pdMS_TO_TICKS(5000));
   }
 }
 

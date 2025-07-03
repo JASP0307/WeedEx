@@ -16,7 +16,7 @@ private:
 public:
   YawSensor();
   void begin();
-  void update();
+  void update(float deltaTime);
   float getYaw() const;
   void resetYaw() { yawAngle = 0.0; } // Función adicional útil
 };

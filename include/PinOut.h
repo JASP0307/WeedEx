@@ -52,14 +52,14 @@ namespace Pinout {
     // SUBSISTEMA DE ACTUACIÓN (LASER])
     //----------------------------------------------------------------
     namespace Laser {
-        constexpr uint8_t Laser_1 = 38;
+        constexpr uint8_t Laser_1 = A12;
     }
 
     //================================================================
     // SUBSISTEMA DE ACTUACICIÓN (LEDS])
     //----------------------------------------------------------------
     namespace TiraLED {
-        constexpr uint8_t LEDs = 36;
+        constexpr uint8_t LEDs = A1;
     }
 
     //================================================================

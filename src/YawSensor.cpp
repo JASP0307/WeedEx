@@ -54,24 +54,14 @@ void YawSensor::readGyroYaw() {
 
   if (Wire.available() >= 2) {
     int16_t gyroZ = Wire.read() << 8 | Wire.read();
-    rateYaw = (float)gyroZ / 65.5; // Conversión para rango ±1000°/s
+    rateYaw = (float)gyroZ / 32.8; // Conversión para rango ±1000°/s
   }
 }
 
-void YawSensor::update() {
-  unsigned long currentTime = micros();
-  float deltaTime = (currentTime - lastUpdateTime) / 1000000.0; // Convertir a segundos
-  
-  // Solo actualizar si ha pasado suficiente tiempo (evitar divisiones por cero)
-  if (deltaTime > 0.001) { // Mínimo 1ms
+void YawSensor::update(float deltaTime) {
     readGyroYaw();
     rateYaw -= calibrationYaw;
-    
-    // Integración con tiempo real
     yawAngle += rateYaw * deltaTime;
-    
-    lastUpdateTime = currentTime;
-  }
 }
 
 float YawSensor::getYaw() const {
