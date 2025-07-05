@@ -11,6 +11,7 @@
 #include "PinOut.h"
 #include "Laser.h"
 #include "RobotDefinitions.h"
+#include "DeltaKinematics.h"
 
 #define btSerial Serial1
 
@@ -20,6 +21,27 @@ SemaphoreHandle_t stateMutex;
 
 // Mutex para proteger el acceso a la variable del voltaje
 SemaphoreHandle_t batteryMutex;
+
+QueueHandle_t deltaQueue;
+
+// --- LÓGICA DEL BRAZO DELTA ---
+// Parámetros físicos y de compensación
+DeltaKinematics DK(52, 113, 37, 63);
+const int SERVO1_HORIZONTAL = 172; 
+const int SERVO2_HORIZONTAL = 168;
+const int SERVO3_HORIZONTAL = 178;
+const double ROTATION_ANGLE_DEG = -30.0;
+double cos_theta, sin_theta;
+
+// Posiciones
+const double HOME_X = 0, HOME_Y = 0, HOME_Z = -140;
+const double Z_ATAQUE = -150;
+
+// Estructura y array para el grid de ataque
+struct GridPoint { double x; double y; double z;};
+const int NUM_GRID_POINTS = 20;
+GridPoint grid[NUM_GRID_POINTS];
+
 
 // Crear motores con pines de interrupción diferentes
 MotorModule motorIzq(Pinout::Locomocion::MotorIzquierdo::rPWM,
@@ -38,10 +60,10 @@ MotorModule motorDer(Pinout::Locomocion::MotorDerecho::rPWM,
                      Pinout::Locomocion::MotorDerecho::ENC_B,
                      360, 50);
 
-//ServoModule SERV_01(Pinout::BrazoDelta::SERVO_1);
-//ServoModule SERV_02(Pinout::BrazoDelta::SERVO_2);
-//ServoModule SERV_03(Pinout::BrazoDelta::SERVO_3);
-//ServoModule SERV_04(Pinout::Rastrillos::SERVO_4);
+ServoModule SERV_01(Pinout::BrazoDelta::SERVO_1);
+ServoModule SERV_02(Pinout::BrazoDelta::SERVO_2);
+ServoModule SERV_03(Pinout::BrazoDelta::SERVO_3);
+ServoModule SERV_04(Pinout::Rastrillos::SERVO_4);
 
 YawSensor yawSensor;
 Ultrasonico UltrDer(Pinout::Sensores::Ultra_Der::TRIG, Pinout::Sensores::Ultra_Der::ECHO);
@@ -65,13 +87,18 @@ TickType_t laserStartTime  = 0;
 // Prototipos de tareas
 void TaskFSM(void *pvParameters);
 void TaskLocomotion(void *pvParameters);
-
 void TaskSensors(void *pvParameters);
 void TaskBattery(void *pvParameters);
 void TaskComms(void *pvParameters);
 void TaskServoControl(void *pvParameters);
-void TaskSimulateArm(void *pvParameters);
+//void TaskSimulateArm(void *pvParameters);
+void TaskDeltaControl(void *pvParameters);
 void TaskBluetoothCommunication(void *pvParameters);
+
+// Funciones auxiliares del brazo delta
+void delta_init();
+void delta_moveTo(double x, double y, double z);
+void delta_moveTo_Compensated(double userX, double userY, double userZ);
 
 // Funciones auxiliares
 RobotState getState();
@@ -106,6 +133,10 @@ void setup() {
       Serial.println("Error: No se pudo crear el locomotionMutex");
   }
 
+  deltaQueue = xQueueCreate(5, sizeof(int));
+
+
+
   pinMode(Pinout::TiraLED::LEDs, OUTPUT);
 
   // Inicializar motores
@@ -125,6 +156,8 @@ void setup() {
   // Activar control PID
   motorIzq.activarPID(true);
   motorDer.activarPID(true);
+
+  delta_init();
   //SERV_01.begin();
   Serial.println("Motores inicializados");
   
@@ -133,10 +166,11 @@ void setup() {
   xTaskCreate(TaskLocomotion,             "Locomotion", 256, NULL, 1, NULL);
   xTaskCreate(TaskSensors,                "Sensors",    256, NULL, 2, NULL);
   xTaskCreate(TaskBattery,                "Battery",    128, NULL, 2, NULL);
-  xTaskCreate(TaskComms,                  "Comms",      256, NULL, 2, NULL);
-  xTaskCreate(TaskServoControl,           "ServoControl",  256, NULL, 1, NULL);
-  xTaskCreate(TaskSimulateArm,            "Arm Sim Task", 256, NULL, 2, NULL);
+  xTaskCreate(TaskComms,                  "Comms", 256, NULL, 2, NULL);
+  xTaskCreate(TaskServoControl,           "ServoControl", 256, NULL, 1, NULL);
+  //xTaskCreate(TaskSimulateArm,          "Arm Sim Task", 256, NULL, 2, NULL);
   xTaskCreate(TaskBluetoothCommunication, "Bluetooth Test Task", 2048, NULL, 2, NULL);
+  xTaskCreate(TaskDeltaControl,           "DeltaControl", 512, NULL, 2, NULL);
 
   Serial.println("Tareas FreeRTOS creadas");
 }
@@ -168,7 +202,6 @@ String robotStateToString(RobotState state) {
     case MOVING_TO_WEED: return "MOVING_TO_WEED";
     case LASERING: return "LASERING";
     case RETURNING_HOME: return "RETURNING_HOME";
-    case ACTUATING: return "ACTUATING";
     case ERROR_STATE: return "ERROR_STATE";
     case LOW_BATTERY: return "LOW_BATTERY";
     case OBSTACLE: return "OBSTACLE";
@@ -197,6 +230,74 @@ void setBaseSpeed(float newSpeed) {
     g_baseSpeedRPM = newSpeed;
     xSemaphoreGive(locomotionMutex);
   }
+}
+
+void poblarGrid() {
+    // Aquí pegas las 20 coordenadas que ya calibraste
+    // Ejemplo:
+    grid[0] = { -40.0, 50.0, -105.0 };
+    grid[1] = { -30.0, 50.0, -105.0 };
+    grid[2] = { -20.0, 50.0, -105.0 };
+    grid[3] = { -40.0, 50.0, -105.0 };
+    grid[4] = { -30.0, 50.0, -105.0 };
+    grid[5] = { -20.0, 50.0, -105.0 };
+    grid[6] = { -40.0, 50.0, -105.0 };
+    grid[7] = { -30.0, 50.0, -105.0 };
+    grid[8] = { -20.0, 50.0, -105.0 };
+    grid[9] = { -40.0, 50.0, -105.0 };
+    grid[10] = { -30.0, 50.0, -105.0};
+    grid[11] = { -40.0, 50.0, -105.0 };
+    grid[12] = { -30.0, 50.0, -105.0 };
+    grid[13] = { -20.0, 50.0, -105.0 };
+    grid[14] = { -40.0, 50.0, -105.0 };
+    grid[15] = { -30.0, 50.0, -105.0 };
+    grid[16] = { -20.0, 50.0, -105.0 };
+    grid[17] = { -40.0, 50.0, -105.0 };
+    grid[18] = { -30.0, 50.0, -105.0 };
+    grid[19] = { -20.0, 50.0, -105.0 };
+
+    Serial.println("Grid de ataque poblado.");
+}
+
+void delta_init() {
+    // Adjuntar servos
+    //servo1.attach(Pinout::BrazoDelta::SERVO_1);
+    //servo2.attach(Pinout::BrazoDelta::SERVO_2);
+    //servo3.attach(Pinout::BrazoDelta::SERVO_3);
+
+    // Poblar el grid con tus coordenadas
+    poblarGrid();
+
+    // Pre-calcular valores para la rotación
+    double rotation_rad = ROTATION_ANGLE_DEG * PI / 180.0;
+    cos_theta = cos(rotation_rad);
+    sin_theta = sin(rotation_rad);
+
+    // Mover a la posición HOME inicial
+    delta_moveTo_Compensated(HOME_X, HOME_Y, HOME_Z);
+    Serial.println("Brazo Delta inicializado y en HOME.");
+}
+
+void delta_moveTo_Compensated(double userX, double userY, double userZ) {
+    double deltaX = userX * cos_theta - userY * sin_theta;
+    double deltaY = userX * sin_theta + userY * cos_theta;
+    delta_moveTo(deltaX, deltaY, userZ);
+}
+
+void delta_moveTo(double x, double y, double z) {
+    if (DK.inverse(x, y, z) == no_error) {
+        int s1 = SERVO1_HORIZONTAL - DK.a;
+        int s2 = SERVO2_HORIZONTAL - DK.b;
+        int s3 = SERVO3_HORIZONTAL - DK.c;
+        SERV_01.setTarget(s1);
+        SERV_02.setTarget(s2);
+        SERV_03.setTarget(s3);
+        //servo1.write(s1);
+        //servo2.write(s2);
+        //servo3.write(s3);
+    } else {
+        Serial.println("ERROR: Posicion DELTA inalcanzable.");
+    }
 }
 
 // FSM principal
@@ -255,7 +356,7 @@ void TaskFSM(void *pvParameters) {
             
             // Iniciar el movimiento del brazo (función no bloqueante)
             //brazoDelta.startMoveTo(posicionMaleza); // Asume que esta función retorna de inmediato
-            g_armCommand = CMD_MOVE_TO_TARGET;     
+            //g_armCommand = CMD_MOVE_TO_TARGET;     
             setState(MOVING_TO_WEED);
             Serial.println("Estado: MOVING_TO_WEED");
           }
@@ -283,25 +384,20 @@ void TaskFSM(void *pvParameters) {
               setState(LASERING);
               Serial.println("Estado: LASERING (2s)");
           } else if (receivedEvent == EVENT_LOW_BATTERY) {
-            setState(LOW_BATTERY);
-            Serial.println("Estado: LOW_BATTERY");
-            digitalWrite(Pinout::TiraLED::LEDs, LOW);
+              setState(LOW_BATTERY);
+              Serial.println("Estado: LOW_BATTERY");
+              digitalWrite(Pinout::TiraLED::LEDs, LOW);
           }
           break;
         
         case LASERING:
-          // En este estado, no esperamos un evento, sino que el tiempo pase.
-          // Usamos la misma técnica no bloqueante que con el obstáculo.
-          // La comprobación se haría fuera del 'if (xQueueReceive...)'
-          // ... (ver lógica de temporizador más abajo)
-          
+
           // Podríamos también recibir un evento de finalización del temporizador
           if (receivedEvent == EVENT_LASER_COMPLETE) {
-              Laser_01.off();
-              //brazoDelta.startReturnToHome(); // Inicia el movimiento de vuelta (no bloqueante)
-              g_armCommand = CMD_RETURN_HOME;
-              setState(RETURNING_HOME);
-              Serial.println("Estado: RETURNING_HOME");
+            Laser_01.off();
+            //g_armCommand = CMD_RETURN_HOME;
+            setState(RETURNING_HOME);
+            Serial.println("Estado: RETURNING_HOME");
           } else if (receivedEvent == EVENT_LOW_BATTERY) {
             setState(LOW_BATTERY);
             Serial.println("Estado: LOW_BATTERY");
@@ -312,26 +408,15 @@ void TaskFSM(void *pvParameters) {
         case RETURNING_HOME:
           // Esperando a que el brazo vuelva a su posición inicial.
           // La tarea del brazo delta enviará este evento.
-          if (receivedEvent == EVENT_ARM_AT_HOME) {
+          if (receivedEvent == EVENT_ATTACK_COMPLETE) {
               // Secuencia completada, volvemos a navegar
               setState(NAVIGATING);
               Serial.println("Estado: NAVIGATING (secuencia de actuacion finalizada)");
-              // Reactivar motores para navegar
-              //motorIzq.establecerSetpoint(VELOCIDAD_NORMAL);
-              //motorDer.establecerSetpoint(VELOCIDAD_NORMAL);
           } else if (receivedEvent == EVENT_LOW_BATTERY) {
             setState(LOW_BATTERY);
             Serial.println("Estado: LOW_BATTERY");
             digitalWrite(Pinout::TiraLED::LEDs, LOW);
           }
-          break;
-
-        case ACTUATING:
-          // Esperar a que actuador confirme finalización
-          vTaskDelay(pdMS_TO_TICKS(1000));
-          // Volver a navegación después de actuar
-          setState(NAVIGATING);
-          Serial.println("Estado: NAVIGATING (post-actuación)");
           break;
 
         case ERROR_STATE:
@@ -482,6 +567,54 @@ void TaskLocomotion(void *pvParameters) {
   }
 }
 
+void TaskDeltaControl(void *pvParameters){
+  (void) pvParameters;
+
+  int grid_index;
+  FSMEvent eventToSend;
+
+  for(;;){
+    // Esperar a que llegue un comando (índice del grid) a la cola
+    if(xQueueReceive(deltaQueue, &grid_index, portMAX_DELAY)){
+
+      // 1. Validar el índice recibido
+      if(grid_index >= 0 && grid_index < NUM_GRID_POINTS){
+        
+        // 2. Notificar a la FSM que el brazo se está moviendo
+        eventToSend = EVENT_WEED_FOUND; // O un nuevo evento como EVENT_ARM_MOVING
+        xQueueSend(fsmQueue, &eventToSend, 0);
+        
+        // 3. Obtener las coordenadas del grid y moverse
+        GridPoint target = grid[grid_index];
+        delta_moveTo_Compensated(target.x, target.y, Z_ATAQUE);
+        vTaskDelay(pdMS_TO_TICKS(1000)); // Simular tiempo de movimiento
+
+        // 4. Notificar a la FSM que el brazo llegó al objetivo
+        eventToSend = EVENT_ARM_AT_TARGET;
+        xQueueSend(fsmQueue, &eventToSend, 0);
+
+        // --- Aquí se quedaría esperando hasta que termine la acción (ej. láser) ---
+        // La FSM se encarga de la temporización del láser.
+        // Después de que la FSM complete el estado LASERING, enviará un comando de regreso a casa.
+        // Podríamos manejarlo aquí o en la FSM. Por simplicidad, la FSM lo maneja.
+
+        // Simulación de espera durante el lasering
+        vTaskDelay(pdMS_TO_TICKS(3000)); 
+
+        // 5. Volver a la posición HOME
+        delta_moveTo_Compensated(HOME_X, HOME_Y, HOME_Z);
+        vTaskDelay(pdMS_TO_TICKS(1000)); // Simular tiempo de regreso
+
+        // 6. Notificar a la FSM que la secuencia completa ha terminado
+        eventToSend = EVENT_ATTACK_COMPLETE; // <<<--- NUEVO EVENTO
+        xQueueSend(fsmQueue, &eventToSend, 0);
+
+      } else {
+        Serial.println("ERROR: Índice de grid inválido recibido.");
+      }
+    }
+  }
+}
 
 void TaskSensors(void *pvParameters) {
   (void) pvParameters;
@@ -521,7 +654,6 @@ void TaskSensors(void *pvParameters) {
     vTaskDelayUntil(&lastWakeTime, delayTicks);
   }
 }
-
 
 void TaskBattery(void *pvParameters) {
   (void) pvParameters;
@@ -602,28 +734,15 @@ void TaskComms(void *pvParameters) {
         xQueueSend(fsmQueue, &e, 0);
         Serial.println("ACK,RESUME");
       }
-      else if (msg.startsWith("CMD,SPEED,")) {
-        // Formato: CMD,SPEED,LEFT,RIGHT
-        int firstComma = msg.indexOf(',', 10);
-        int secondComma = msg.indexOf(',', firstComma + 1);
+      else if (msg.startsWith("ATTACK,")) {
+        String indexStr = msg.substring(7); // "ATTACK," tiene 7 caracteres
+        int grid_index = indexStr.toInt();
         
-        if (firstComma > 10 && secondComma > firstComma) {
-          String leftStr = msg.substring(10, firstComma);
-          String rightStr = msg.substring(firstComma + 1, secondComma);
-          
-          float speedLeft = leftStr.toFloat();
-          float speedRight = rightStr.toFloat();
-          
-          // Validar rangos razonables
-          speedLeft = constrain(speedLeft, -100.0, 100.0);
-          speedRight = constrain(speedRight, -100.0, 100.0);
-          
-          motorIzq.establecerSetpoint(speedLeft);
-          motorDer.establecerSetpoint(speedRight);
-          
-          Serial.println("ACK,SPEED");
+        // Enviar el índice a la cola del brazo delta
+        if (xQueueSend(deltaQueue, &grid_index, pdMS_TO_TICKS(100)) == pdPASS) {
+            Serial.println("ACK,ATTACK_CMD_RECEIVED");
         } else {
-          Serial.println("ERROR,SPEED_FORMAT");
+            Serial.println("ERROR,DELTA_QUEUE_FULL");
         }
       }
       else {
@@ -646,6 +765,7 @@ void TaskComms(void *pvParameters) {
   }
 }
 
+/*
 void TaskSimulateArm(void *pvParameters) {
   (void) pvParameters; // Evitar advertencia de parámetro no usado
 
@@ -691,6 +811,7 @@ void TaskSimulateArm(void *pvParameters) {
     vTaskDelay(pdMS_TO_TICKS(5000));
   }
 }
+*/
 
 void TaskBluetoothCommunication(void *pvParameters) {
   (void) pvParameters;
