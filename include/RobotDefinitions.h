@@ -69,7 +69,7 @@ const int POS_TRABAJO_RASTRILLO = 10; // Posición para rastrillar
 
 const float R1 = 21800.0; // 20k ohms
 const float R2 = 10000.0; // 10k ohms
-const float VOLTAJE_BATERIA_BAJA = 10.5;
+const float VOLTAJE_BATERIA_BAJA = 9;
 
 // Puedes añadir más constantes aquí (velocidades de motor, etc.)
 volatile ArmCommand g_armCommand = CMD_IDLE;

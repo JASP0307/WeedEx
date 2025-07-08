@@ -35,7 +35,7 @@ double cos_theta, sin_theta;
 
 // Posiciones
 const double HOME_X = 0, HOME_Y = 0, HOME_Z = -140;
-const double Z_ATAQUE = -150;
+const double Z_ATAQUE = -105;
 
 // Estructura y array para el grid de ataque
 struct GridPoint { double x; double y; double z;};
@@ -91,7 +91,6 @@ void TaskSensors(void *pvParameters);
 void TaskBattery(void *pvParameters);
 void TaskComms(void *pvParameters);
 void TaskServoControl(void *pvParameters);
-//void TaskSimulateArm(void *pvParameters);
 void TaskDeltaControl(void *pvParameters);
 void TaskBluetoothCommunication(void *pvParameters);
 
@@ -168,9 +167,8 @@ void setup() {
   xTaskCreate(TaskBattery,                "Battery",    128, NULL, 2, NULL);
   xTaskCreate(TaskComms,                  "Comms", 256, NULL, 2, NULL);
   xTaskCreate(TaskServoControl,           "ServoControl", 256, NULL, 1, NULL);
-  //xTaskCreate(TaskSimulateArm,          "Arm Sim Task", 256, NULL, 2, NULL);
-  xTaskCreate(TaskBluetoothCommunication, "Bluetooth Test Task", 2048, NULL, 2, NULL);
-  xTaskCreate(TaskDeltaControl,           "DeltaControl", 512, NULL, 2, NULL);
+  xTaskCreate(TaskBluetoothCommunication, "Bluetooth Test Task", 1024, NULL, 2, NULL);
+  xTaskCreate(TaskDeltaControl,           "DeltaControl", 256, NULL, 2, NULL);
 
   Serial.println("Tareas FreeRTOS creadas");
 }
@@ -260,10 +258,6 @@ void poblarGrid() {
 }
 
 void delta_init() {
-    // Adjuntar servos
-    //servo1.attach(Pinout::BrazoDelta::SERVO_1);
-    //servo2.attach(Pinout::BrazoDelta::SERVO_2);
-    //servo3.attach(Pinout::BrazoDelta::SERVO_3);
 
     // Poblar el grid con tus coordenadas
     poblarGrid();
@@ -292,9 +286,6 @@ void delta_moveTo(double x, double y, double z) {
         SERV_01.setTarget(s1);
         SERV_02.setTarget(s2);
         SERV_03.setTarget(s3);
-        //servo1.write(s1);
-        //servo2.write(s2);
-        //servo3.write(s3);
     } else {
         Serial.println("ERROR: Posicion DELTA inalcanzable.");
     }
@@ -319,9 +310,6 @@ void TaskFSM(void *pvParameters) {
               motorDer.activarPID(true);
             }
             digitalWrite(Pinout::TiraLED::LEDs, HIGH);
-            //motorIzq.establecerSetpoint(30);
-            //motorDer.establecerSetpoint(30);
-            //SERV_01.setTarget(30);
             setState(NAVIGATING);
             Serial.println("Estado: NAVIGATING");
           } else if (receivedEvent == EVENT_LOW_BATTERY) {
@@ -495,20 +483,13 @@ void TaskServoControl(void *pvParameters) {
   (void) pvParameters;
 
   vTaskDelay(pdMS_TO_TICKS(1000)); 
-  
-  //SERV_01.begin();
-  //SERV_01.setTarget(120);
-  //SERV_02.begin();
-  //SERV_03.begin();
-  //SERV_04.begin();
 
   for (;;) {
-    //SERV_01.update();
-    //SERV_02.update();
-    //SERV_03.update();
+    SERV_01.update();
+    SERV_02.update();
+    SERV_03.update();
     //SERV_04.update();
-//
-    vTaskDelay(pdMS_TO_TICKS(50)); 
+    vTaskDelay(pdMS_TO_TICKS(30)); 
   }
 }
 
@@ -547,9 +528,9 @@ void TaskLocomotion(void *pvParameters) {
       float pidCorrection = (Kp_heading * headingError) + (Ki_heading * integralError) + (Kd_heading * derivativeError);
       float leftSetpoint = baseSpeedRPM - pidCorrection;
       float rightSetpoint = baseSpeedRPM + pidCorrection;
-      Serial.print(leftSetpoint);
-      Serial.print(" | ");
-      Serial.println(rightSetpoint);
+      //Serial.print(leftSetpoint);
+      //Serial.print(" | ");
+      //Serial.println(rightSetpoint);
       
       //motorIzq.establecerSetpoint(leftSetpoint);
       //motorDer.establecerSetpoint(-rightSetpoint);
@@ -586,8 +567,8 @@ void TaskDeltaControl(void *pvParameters){
         
         // 3. Obtener las coordenadas del grid y moverse
         GridPoint target = grid[grid_index];
-        delta_moveTo_Compensated(target.x, target.y, Z_ATAQUE);
-        vTaskDelay(pdMS_TO_TICKS(1000)); // Simular tiempo de movimiento
+        delta_moveTo_Compensated(target.x, target.y, target.z);
+        vTaskDelay(pdMS_TO_TICKS(1500)); // Simular tiempo de movimiento
 
         // 4. Notificar a la FSM que el brazo llegó al objetivo
         eventToSend = EVENT_ARM_AT_TARGET;
@@ -628,8 +609,8 @@ void TaskSensors(void *pvParameters) {
   const int DELAY_MS = 20; // 100 Hz
   const TickType_t delayTicks = pdMS_TO_TICKS(DELAY_MS);
   const float DELAY_SEC = DELAY_MS / 1000.0;
-  Serial.print("DEBUG: DELAY_SEC calculado es: ");
-  Serial.println(DELAY_SEC, 4); 
+  //Serial.print("DEBUG: DELAY_SEC calculado es: ");
+  //Serial.println(DELAY_SEC, 4); 
   TickType_t lastWakeTime = xTaskGetTickCount();
   unsigned long lastPrintTime = 0;
   for (;;) {
@@ -764,54 +745,6 @@ void TaskComms(void *pvParameters) {
     vTaskDelay(pdMS_TO_TICKS(100)); // Reducir delay para mejor respuesta
   }
 }
-
-/*
-void TaskSimulateArm(void *pvParameters) {
-  (void) pvParameters; // Evitar advertencia de parámetro no usado
-
-  FSMEvent eventToSend;
-
-  Serial.println("[SIM_ARM] Tarea de simulación de brazo iniciada.");
-
-  for (;;) {
-    // 1. Comprobar si hay un nuevo comando
-    if (g_armCommand != CMD_IDLE) {
-      
-      // 2. Procesar el comando recibido
-      switch (g_armCommand) {
-        
-        case CMD_MOVE_TO_TARGET:
-          Serial.println("[SIM_ARM] Comando recibido: Mover a objetivo. Simulando por 3s...");
-          vTaskDelay(pdMS_TO_TICKS(SIMULATED_MOVE_TIME_MS)); // Simulación no bloqueante
-          
-          Serial.println("[SIM_ARM] Simulación completada. Enviando EVENT_ARM_AT_TARGET.");
-          eventToSend = EVENT_ARM_AT_TARGET;
-          xQueueSend(fsmQueue, &eventToSend, 0);
-          break;
-
-        case CMD_RETURN_HOME:
-          Serial.println("[SIM_ARM] Comando recibido: Volver a casa. Simulando por 3s...");
-          vTaskDelay(pdMS_TO_TICKS(SIMULATED_MOVE_TIME_MS)); // Simulación no bloqueante
-
-          Serial.println("[SIM_ARM] Simulación completada. Enviando EVENT_ARM_AT_HOME.");
-          eventToSend = EVENT_ARM_AT_HOME;
-          xQueueSend(fsmQueue, &eventToSend, 0);
-          break;
-        
-        default:
-          // Comando desconocido, no hacer nada.
-          break;
-      }
-
-      // 3. Resetear el comando para no volver a ejecutarlo
-      g_armCommand = CMD_IDLE;
-    }
-
-    // Esperar un poco antes de volver a comprobar para no consumir el 100% de la CPU
-    vTaskDelay(pdMS_TO_TICKS(5000));
-  }
-}
-*/
 
 void TaskBluetoothCommunication(void *pvParameters) {
   (void) pvParameters;

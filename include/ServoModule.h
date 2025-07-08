@@ -13,8 +13,8 @@ public:
   ServoModule(uint8_t pin);
 
   // Inicializa y adjunta el servo al pin especificado.
-  // Se puede proporcionar un ángulo inicial, por defecto es 90.
-  void begin(int initialAngle = 90);
+  // Se puede proporcionar un ángulo inicial, por defecto es 170.
+  void begin(int initialAngle = 170);
 
   // Establece el ángulo objetivo al que se moverá el servo.
   void setTarget(int angle);
