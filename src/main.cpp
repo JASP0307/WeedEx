@@ -34,8 +34,8 @@ const double ROTATION_ANGLE_DEG = -30.0;
 double cos_theta, sin_theta;
 
 // Posiciones
-const double HOME_X = 0, HOME_Y = 0, HOME_Z = -140;
-const double Z_ATAQUE = -105;
+const double HOME_X = 0, HOME_Y = 0, HOME_Z = -90;
+const double Z_ATAQUE = -100;
 
 // Estructura y array para el grid de ataque
 struct GridPoint { double x; double y; double z;};
@@ -156,7 +156,7 @@ void setup() {
   motorIzq.activarPID(true);
   motorDer.activarPID(true);
 
-  delta_init();
+  
   //SERV_01.begin();
   Serial.println("Motores inicializados");
   
@@ -166,10 +166,10 @@ void setup() {
   xTaskCreate(TaskSensors,                "Sensors",    256, NULL, 2, NULL);
   xTaskCreate(TaskBattery,                "Battery",    128, NULL, 2, NULL);
   xTaskCreate(TaskComms,                  "Comms", 256, NULL, 2, NULL);
-  xTaskCreate(TaskServoControl,           "ServoControl", 256, NULL, 1, NULL);
+  xTaskCreate(TaskServoControl,           "ServoControl", 256, NULL, 3, NULL);
   xTaskCreate(TaskBluetoothCommunication, "Bluetooth Test Task", 1024, NULL, 2, NULL);
   xTaskCreate(TaskDeltaControl,           "DeltaControl", 256, NULL, 2, NULL);
-
+  
   Serial.println("Tareas FreeRTOS creadas");
 }
 
@@ -261,7 +261,7 @@ void delta_init() {
 
     // Poblar el grid con tus coordenadas
     poblarGrid();
-
+    
     // Pre-calcular valores para la rotación
     double rotation_rad = ROTATION_ANGLE_DEG * PI / 180.0;
     cos_theta = cos(rotation_rad);
@@ -481,7 +481,7 @@ void TaskFSM(void *pvParameters) {
 
 void TaskServoControl(void *pvParameters) {
   (void) pvParameters;
-
+   delta_init();
   vTaskDelay(pdMS_TO_TICKS(1000)); 
 
   for (;;) {

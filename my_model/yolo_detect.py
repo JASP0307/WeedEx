@@ -191,7 +191,7 @@ while True:
         classname = labels[classidx]
 
         # Opcional: Imprimir las coordenadas en la consola
-        print(f'Objeto: {classname}, Centro: ({centerX}, {centerY})')
+        # print(f'Objeto: {classname}, Centro: ({centerX}, {centerY})')
 
         # Get bounding box confidence
         conf = detections[i].conf.item()
