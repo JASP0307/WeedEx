@@ -34,7 +34,8 @@ typedef enum {
   EVENT_LOW_BATTERY,
   EVENT_ERROR,
   EVENT_RESUME,
-  EVENT_ATTACK_COMPLETE
+  EVENT_ATTACK_COMPLETE,
+  EVENT_TIMEOUT_OBSTACLE
 } FSMEvent;
 
 enum ArmCommand {
@@ -75,6 +76,7 @@ const float VOLTAJE_BATERIA_BAJA = 9;
 volatile ArmCommand g_armCommand = CMD_IDLE;
 
 bool g_isRaking = false;
+TickType_t rakeStartTime;
 
 float g_targetYaw = 0.0;      // Rumbo deseado (ej. 0.0 para ir al Norte)
 float g_baseSpeedRPM = 10.0;  // Velocidad base de los motores en RPM
@@ -85,5 +87,7 @@ SemaphoreHandle_t locomotionMutex;
 const float Kp_heading = 0.5;
 const float Ki_heading = 0.0;
 const float Kd_heading = 0.0;
+
+float VELOCIDAD_CRUCERO = 10.0;
 
 #endif // ROBOT_DEFINITIONS_H

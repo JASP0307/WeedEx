@@ -10,7 +10,7 @@ GRILLA_COLUMNAS = 10
 ANCHO_HILERA_REAL_CM = 10.0 # Ancho real del objeto de referencia
 
 # NUEVO PARÁMETRO: Define la altura (en píxeles desde arriba) donde se dibujará la grilla.
-GRILLA_POSICION_Y = 20
+GRILLA_POSICION_Y = 200
 
 # --- VARIABLES GLOBALES PARA CALIBRACIÓN ---
 puntos_calibracion = []

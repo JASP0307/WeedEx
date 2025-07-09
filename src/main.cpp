@@ -34,7 +34,7 @@ const double ROTATION_ANGLE_DEG = -30.0;
 double cos_theta, sin_theta;
 
 // Posiciones
-const double HOME_X = 0, HOME_Y = 0, HOME_Z = -90;
+const double HOME_X = 0, HOME_Y = 0, HOME_Z = -110;
 const double Z_ATAQUE = -100;
 
 // Estructura y array para el grid de ataque
@@ -231,34 +231,37 @@ void setBaseSpeed(float newSpeed) {
 }
 
 void poblarGrid() {
-    // Aquí pegas las 20 coordenadas que ya calibraste
-    // Ejemplo:
-    grid[0] = { -40.0, 50.0, -105.0 };
-    grid[1] = { -30.0, 50.0, -105.0 };
-    grid[2] = { -20.0, 50.0, -105.0 };
-    grid[3] = { -40.0, 50.0, -105.0 };
-    grid[4] = { -30.0, 50.0, -105.0 };
-    grid[5] = { -20.0, 50.0, -105.0 };
-    grid[6] = { -40.0, 50.0, -105.0 };
-    grid[7] = { -30.0, 50.0, -105.0 };
-    grid[8] = { -20.0, 50.0, -105.0 };
-    grid[9] = { -40.0, 50.0, -105.0 };
-    grid[10] = { -30.0, 50.0, -105.0};
-    grid[11] = { -40.0, 50.0, -105.0 };
-    grid[12] = { -30.0, 50.0, -105.0 };
-    grid[13] = { -20.0, 50.0, -105.0 };
-    grid[14] = { -40.0, 50.0, -105.0 };
-    grid[15] = { -30.0, 50.0, -105.0 };
-    grid[16] = { -20.0, 50.0, -105.0 };
-    grid[17] = { -40.0, 50.0, -105.0 };
-    grid[18] = { -30.0, 50.0, -105.0 };
-    grid[19] = { -20.0, 50.0, -105.0 };
+
+    grid[0] = { 15.00, -90.00, -90.00 };
+    grid[1] = { 5.00, -80.00, -100.00 };
+    grid[2] = { 5.00, -80.00, -90.00 };
+    grid[3] = { 5.00, -80.00, -75.00 };
+    grid[4] = { 5.00, -80.00, -65.00 };
+    grid[5] = { -60.00, -45.00, -80.00 };
+    grid[6] = { -50.00, -25.00, -100.00 };
+    grid[7] = { -50.00, -10.00, -120.00 };
+    grid[8] = { -60.00, -0.00, -110.00 };
+    grid[9] = { -90.00, 15.00, -65.00 };
+    grid[10] = {  00.00, -100.00, -75.00 };
+    grid[11] = { -15.00, -100.00, -75.00 };
+    grid[12] = { -5.00, -95.00, -70.00 };
+    grid[13] = { -10.00, -90.00, -55.00 };
+    grid[14] = { -75.00, -55.00, -60.00 };
+    grid[15] = { -75.00, -55.00, -60.00 };
+    grid[16] = { -55.00, -40.00, -100.00 };
+    grid[17] = { -40.00, -35.00, -110.00 }; //FALTA CALIBRACION
+    grid[18] = { -75.00, -20.00, -100.00 };
+    grid[19] = { -90.00, -5.00, -110.00 };
 
     Serial.println("Grid de ataque poblado.");
 }
 
 void delta_init() {
 
+    SERV_01.begin();
+    SERV_02.begin();
+    SERV_03.begin();
+    
     // Poblar el grid con tus coordenadas
     poblarGrid();
     
@@ -291,181 +294,165 @@ void delta_moveTo(double x, double y, double z) {
     }
 }
 
+
+void onEnterIdle() {
+    Serial.println("Entrando en IDLE");
+    motorIzq.establecerSetpoint(0);
+    motorDer.establecerSetpoint(0);
+    digitalWrite(Pinout::TiraLED::LEDs, LOW);
+    // Podrías desactivar el PID si no se usa para ahorrar recursos
+    if (motorIzq.pidEstaActivo()) {
+        motorIzq.activarPID(false);
+        motorDer.activarPID(false);
+    }
+}
+
+void onEnterNavigating() {
+    Serial.println("Entrando en NAVIGATING");
+    // Asegurar que motores estén listos y con velocidad
+    if (!motorIzq.pidEstaActivo()) {
+        motorIzq.activarPID(true);
+        motorDer.activarPID(true);
+    }
+    //motorIzq.establecerSetpoint(VELOCIDAD_CRUCERO); // Usar constantes
+    //motorDer.establecerSetpoint(VELOCIDAD_CRUCERO);
+    digitalWrite(Pinout::TiraLED::LEDs, HIGH);
+}
+
+void onEnterLowBattery() {
+    Serial.println("Entrando en LOW_BATTERY");
+    motorIzq.establecerSetpoint(0);
+    motorDer.establecerSetpoint(0);
+    digitalWrite(Pinout::TiraLED::LEDs, LOW);
+    // Aquí podrías iniciar un parpadeo de LED o un sonido.
+}
+
+void onEnterObstacle() {
+    Serial.println("Entrando en OBSTACLE");
+    motorIzq.establecerSetpoint(0);
+    motorDer.establecerSetpoint(0);
+    digitalWrite(Pinout::TiraLED::LEDs, LOW);
+    obstacleEntryTime = xTaskGetTickCount(); // Iniciar temporizador
+}
+
+void onEnterLasering() {
+    Serial.println("Entrando en LASERING (2s)");
+    Laser_01.on();
+    laserStartTime = xTaskGetTickCount(); // Iniciar temporizador
+}
+
+void onEnterReturningHome() {
+    Serial.println("Entrando en RETURNING_HOME");
+    Laser_01.off();
+}
+
+void onEnterMovingToWeed() {
+    Serial.println("Entrando en MOVING_TO_WEED");
+    motorIzq.establecerSetpoint(0);
+    motorDer.establecerSetpoint(0);
+}
+
+
 // FSM principal
 void TaskFSM(void *pvParameters) {
   (void) pvParameters;
 
   FSMEvent receivedEvent;
 
+  RobotState currentState, newState;
+
+  // Establecer estado inicial y ejecutar su acción de entrada
+  setState(IDLE);
+  onEnterIdle();
+
   for (;;) {
     if (xQueueReceive(fsmQueue, &receivedEvent, pdMS_TO_TICKS(100))) {
       RobotState state = getState();
       
-      switch (state) {
-        case IDLE:
-          if (receivedEvent == EVENT_NAVIGATE) {
-            // Asegurar que motores estén listos
-            if (!motorIzq.pidEstaActivo()) {
-              motorIzq.activarPID(true);
-              motorDer.activarPID(true);
-            }
-            digitalWrite(Pinout::TiraLED::LEDs, HIGH);
-            setState(NAVIGATING);
-            Serial.println("Estado: NAVIGATING");
-          } else if (receivedEvent == EVENT_LOW_BATTERY) {
-            setState(LOW_BATTERY);
-            digitalWrite(Pinout::TiraLED::LEDs, LOW);
-            Serial.println("Estado: LOW_BATTERY");
-          }
-          break;
+      currentState = getState();
+      newState = currentState; // Por defecto, no hay cambio de estado
 
-        case NAVIGATING:
-          if (receivedEvent == EVENT_OBSTACLE) {
-            setState(OBSTACLE);
-            Serial.println("Estado: OBSTACLE");
-            digitalWrite(Pinout::TiraLED::LEDs, LOW);
-            obstacleEntryTime = xTaskGetTickCount();
-          } else if (receivedEvent == EVENT_LOW_BATTERY) {
-            setState(LOW_BATTERY);
-            Serial.println("Estado: LOW_BATTERY");
-            digitalWrite(Pinout::TiraLED::LEDs, LOW);
-          } else if (receivedEvent == EVENT_STOP) {
-            // Detener motores gradualmente
-            motorIzq.establecerSetpoint(0);
-            motorDer.establecerSetpoint(0);
-            digitalWrite(Pinout::TiraLED::LEDs, LOW);
-            //SERV_01.setTarget(180); // Mover a 120 grados
-            setState(IDLE);
-            Serial.println("Estado: IDLE");
-          }else if (receivedEvent == EVENT_WEED_FOUND) {
-            // Detener la navegación
-            motorIzq.establecerSetpoint(0);
-            motorDer.establecerSetpoint(0);
+      // Estos eventos pueden ocurrir en cualquier estado y tienen precedencia.
+      if (receivedEvent == EVENT_LOW_BATTERY) {
+          newState = LOW_BATTERY;
+      } else if (receivedEvent == EVENT_ERROR) {
+          newState = ERROR_STATE;
+      } else {
+          // LÓGICA DE TRANSICIÓN: solo decide el siguiente estado
+          switch (currentState) {
+            case IDLE:
+                if (receivedEvent == EVENT_NAVIGATE) newState = NAVIGATING;
+                break;
+
+            case NAVIGATING:
+                if (receivedEvent == EVENT_STOP) newState = IDLE;
+                else if (receivedEvent == EVENT_OBSTACLE) newState = OBSTACLE;
+                else if (receivedEvent == EVENT_WEED_FOUND) newState = MOVING_TO_WEED;
+                else if (receivedEvent == EVENT_RAKE_WEED_FOUND) {
+                  // Solo iniciamos la acción si no está ya en progreso.
+                  if (!g_isRaking) {
+                      Serial.println("RASTRILLO: Iniciando secuencia concurrente.");
+                      g_isRaking = true;
+                      rakeStartTime = xTaskGetTickCount();
+                      // Acción inmediata: Bajar el rastrillo
+                      // SERV_04.setTarget(POS_TRABAJO_RASTRILLO); 
+                  }
+                }
+                break;
+                
+            case MOVING_TO_WEED:
+                if (receivedEvent == EVENT_ARM_AT_TARGET) newState = LASERING;
+                break;
             
-            // Iniciar el movimiento del brazo (función no bloqueante)
-            //brazoDelta.startMoveTo(posicionMaleza); // Asume que esta función retorna de inmediato
-            //g_armCommand = CMD_MOVE_TO_TARGET;     
-            setState(MOVING_TO_WEED);
-            Serial.println("Estado: MOVING_TO_WEED");
-          }
-          else if (receivedEvent == EVENT_RAKE_WEED_FOUND) {
-        // Solo inicia la secuencia si no está ya en progreso
-            if (!g_isRaking) {
-                Serial.println("RASTRILLO: Iniciando secuencia de rastrillado.");
-                g_isRaking = true;
-                g_rakeStartTime = xTaskGetTickCount();
-                //SERV_04.setTarget(POS_TRABAJO_RASTRILLO); // Bajar el rastrillo
-            }
-          } 
-          break;
+            case LASERING:
+                if (receivedEvent == EVENT_LASER_COMPLETE) newState = RETURNING_HOME;
+                break;
 
-        case MOVING_TO_WEED:
-          // Detener motores y cambiar a actuación
-          motorIzq.establecerSetpoint(0);
-          motorDer.establecerSetpoint(0);
-          // El robot está esperando a que el brazo llegue.
-          // La tarea que controla el brazo delta deberá enviar este evento cuando termine.
-          if (receivedEvent == EVENT_ARM_AT_TARGET) {
-              // El brazo llegó, ahora encendemos el láser
-              Laser_01.on();
-              laserStartTime = xTaskGetTickCount(); // Inicia el temporizador del láser
-              setState(LASERING);
-              Serial.println("Estado: LASERING (2s)");
-          } else if (receivedEvent == EVENT_LOW_BATTERY) {
-              setState(LOW_BATTERY);
-              Serial.println("Estado: LOW_BATTERY");
-              digitalWrite(Pinout::TiraLED::LEDs, LOW);
-          }
-          break;
-        
-        case LASERING:
+            case RETURNING_HOME:
+                if (receivedEvent == EVENT_ATTACK_COMPLETE) newState = NAVIGATING;
+                break;
+            
+            case OBSTACLE:
+                // El evento de fin de espera ahora viene de la cola
+                if (receivedEvent == EVENT_TIMEOUT_OBSTACLE) newState = NAVIGATING;
+                else if (receivedEvent == EVENT_RESUME) newState = NAVIGATING;
+                break;
 
-          // Podríamos también recibir un evento de finalización del temporizador
-          if (receivedEvent == EVENT_LASER_COMPLETE) {
-            Laser_01.off();
-            //g_armCommand = CMD_RETURN_HOME;
-            setState(RETURNING_HOME);
-            Serial.println("Estado: RETURNING_HOME");
-          } else if (receivedEvent == EVENT_LOW_BATTERY) {
-            setState(LOW_BATTERY);
-            Serial.println("Estado: LOW_BATTERY");
-            digitalWrite(Pinout::TiraLED::LEDs, LOW);
+            case LOW_BATTERY:
+            case ERROR_STATE:
+                if (receivedEvent == EVENT_RESUME) newState = IDLE;
+                break;
+              
           }
-          break;
+        }
 
-        case RETURNING_HOME:
-          // Esperando a que el brazo vuelva a su posición inicial.
-          // La tarea del brazo delta enviará este evento.
-          if (receivedEvent == EVENT_ATTACK_COMPLETE) {
-              // Secuencia completada, volvemos a navegar
-              setState(NAVIGATING);
-              Serial.println("Estado: NAVIGATING (secuencia de actuacion finalizada)");
-          } else if (receivedEvent == EVENT_LOW_BATTERY) {
-            setState(LOW_BATTERY);
-            Serial.println("Estado: LOW_BATTERY");
-            digitalWrite(Pinout::TiraLED::LEDs, LOW);
-          }
-          break;
+      // APLICAR CAMBIO DE ESTADO Y EJECUTAR ACCIÓN DE ENTRADA
+      if (newState != currentState) {
+          setState(newState);
 
-        case ERROR_STATE:
-          // Detener todos los motores inmediatamente
-          motorIzq.habilitarMotor(false);
-          motorDer.habilitarMotor(false);
-          if (receivedEvent == EVENT_RESUME) {
-            motorIzq.habilitarMotor(true);
-            motorDer.habilitarMotor(true);
-            setState(IDLE);
-            Serial.println("Estado: IDLE (recuperado de error)");
+          switch (newState) {
+              case IDLE: onEnterIdle(); break;
+              case NAVIGATING: onEnterNavigating(); break;
+              case LOW_BATTERY: onEnterLowBattery(); break;
+              case OBSTACLE: onEnterObstacle(); break;
+              case LASERING: onEnterLasering(); break;
+              case RETURNING_HOME: onEnterReturningHome(); break;
+              case MOVING_TO_WEED: onEnterMovingToWeed(); break;
           }
-          break;
-        
-        case LOW_BATTERY:
-          // Detener motores para conservar energía
-          motorIzq.establecerSetpoint(0);
-          motorDer.establecerSetpoint(0);
-          if (receivedEvent == EVENT_RESUME) {
-            setState(IDLE);
-            Serial.println("Estado: IDLE (batería recuperada)");
-          }
-          break;
-        
-        case OBSTACLE:
-          // Detener motores
-          motorIzq.establecerSetpoint(0);
-          motorDer.establecerSetpoint(0);
-          if (receivedEvent == EVENT_RESUME) {
-            motorIzq.establecerSetpoint(10);
-            motorDer.establecerSetpoint(10);
-            setState(NAVIGATING);
-            Serial.println("Estado: NAVIGATING (obstáculo evitado)");
-          } else if (receivedEvent == EVENT_ERROR) {
-            setState(ERROR_STATE);
-            Serial.println("Estado: ERROR_STATE");
-          } else if (receivedEvent == EVENT_LOW_BATTERY) {
-            setState(LOW_BATTERY);
-            Serial.println("Estado: LOW_BATTERY");
-            digitalWrite(Pinout::TiraLED::LEDs, LOW);
-          }
-          break;
-      }
-    }
-    RobotState currentState = getState();
-    if (currentState == OBSTACLE) {
-      // Comprobar si han pasado 5 segundos desde que entramos en el estado
-      if ((xTaskGetTickCount() - obstacleEntryTime) >= pdMS_TO_TICKS(5000)) {
-        setState(NAVIGATING);
-        Serial.println("Estado: NAVIGATING (5s de espera finalizados)");
-        // Aquí podrías también reanudar la velocidad de los motores si es necesario
-        // motorIzq.establecerSetpoint(VELOCIDAD_ANTERIOR);
-        // motorDer.establecerSetpoint(VELOCIDAD_ANTERIOR);
       }
     }
 
+    // GESTIÓN DE TIMEOUTS
+    currentState = getState();
     if (currentState == LASERING) {
         if ((xTaskGetTickCount() - laserStartTime) >= pdMS_TO_TICKS(2000)) {
-            // El tiempo ha pasado, enviamos un evento a nuestra propia cola
-            // para mantener la lógica de la FSM basada en eventos.
             FSMEvent e = EVENT_LASER_COMPLETE;
+            xQueueSend(fsmQueue, &e, 0);
+        }
+    }
+    if (currentState == OBSTACLE) {
+        if ((xTaskGetTickCount() - obstacleEntryTime) >= pdMS_TO_TICKS(5000)) {
+            FSMEvent e = EVENT_TIMEOUT_OBSTACLE;
             xQueueSend(fsmQueue, &e, 0);
         }
     }
@@ -475,13 +462,13 @@ void TaskFSM(void *pvParameters) {
             //SERV_04.setTarget(POS_INICIAL_RASTRILLO); // Subir el rastrillo
             g_isRaking = false; // Finalizar la secuencia
     }
-    //vTaskDelay(pdMS_TO_TICKS(50)); // Reducir delay para mejor respuesta
+  
   }
 }
 
 void TaskServoControl(void *pvParameters) {
   (void) pvParameters;
-   delta_init();
+  delta_init();
   vTaskDelay(pdMS_TO_TICKS(1000)); 
 
   for (;;) {
@@ -489,7 +476,7 @@ void TaskServoControl(void *pvParameters) {
     SERV_02.update();
     SERV_03.update();
     //SERV_04.update();
-    vTaskDelay(pdMS_TO_TICKS(30)); 
+    vTaskDelay(pdMS_TO_TICKS(25)); 
   }
 }
 
@@ -577,7 +564,6 @@ void TaskDeltaControl(void *pvParameters){
         // --- Aquí se quedaría esperando hasta que termine la acción (ej. láser) ---
         // La FSM se encarga de la temporización del láser.
         // Después de que la FSM complete el estado LASERING, enviará un comando de regreso a casa.
-        // Podríamos manejarlo aquí o en la FSM. Por simplicidad, la FSM lo maneja.
 
         // Simulación de espera durante el lasering
         vTaskDelay(pdMS_TO_TICKS(3000)); 
@@ -587,7 +573,7 @@ void TaskDeltaControl(void *pvParameters){
         vTaskDelay(pdMS_TO_TICKS(1000)); // Simular tiempo de regreso
 
         // 6. Notificar a la FSM que la secuencia completa ha terminado
-        eventToSend = EVENT_ATTACK_COMPLETE; // <<<--- NUEVO EVENTO
+        eventToSend = EVENT_ATTACK_COMPLETE;
         xQueueSend(fsmQueue, &eventToSend, 0);
 
       } else {
