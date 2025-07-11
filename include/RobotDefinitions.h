@@ -90,4 +90,27 @@ const float Kd_heading = 0.0;
 
 float VELOCIDAD_CRUCERO = 10.0;
 
+// --- LÓGICA DEL BRAZO DELTA ---
+// Parámetros físicos y de compensación
+DeltaKinematics DK(52, 113, 37, 63);
+const int SERVO1_HORIZONTAL = 172; 
+const int SERVO2_HORIZONTAL = 168;
+const int SERVO3_HORIZONTAL = 178;
+const double ROTATION_ANGLE_DEG = -30.0;
+double cos_theta, sin_theta;
+
+// Posiciones
+const double HOME_X = 0, HOME_Y = 0, HOME_Z = -110;
+const double Z_ATAQUE = -100;
+
+// Estructura y array para el grid de ataque
+struct GridPoint { double x; double y; double z;};
+const int NUM_GRID_POINTS = 20;
+GridPoint grid[NUM_GRID_POINTS];
+
+
+// --- DECLARACIONES PARA LA TAREA PID ---
+float integralError = 0.0;
+float previousError = 0.0;
+
 #endif // ROBOT_DEFINITIONS_H
