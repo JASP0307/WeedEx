@@ -73,10 +73,10 @@ def dibujar_grilla(frame, origen, pixels_por_cm):
         cv2.line(frame, (x, oy), (x, oy + GRILLA_FILAS * alto_celda_px), (255, 0, 0), 1)
 
 # --- PROGRAMA PRINCIPAL ---
-cap = cv2.VideoCapture(1) # O el índice de tu cámara
+cap = cv2.VideoCapture(0) # O el índice de tu cámara
 # Configura tu resolución si es necesario
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
 cv2.namedWindow("Calibrador de Grilla Centrada")
 cv2.setMouseCallback("Calibrador de Grilla Centrada", manejador_clic)

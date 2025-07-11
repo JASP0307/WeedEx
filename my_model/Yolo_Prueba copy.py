@@ -279,190 +279,203 @@ frame_rate_buffer = []
 fps_avg_len = 200
 img_count = 0
 
+if __name__ == '__main__':
+    # --- NUEVO: Iniciar el servidor Flask en un hilo separado ---
+    print("🚀 Iniciando el servidor de streaming en segundo plano...")
+    flask_thread = threading.Thread(target=lambda: app.run(host='0.0.0.0', port=8000, debug=False))
+    flask_thread.daemon = True
+    flask_thread.start()
+    
     # Begin inference loop
-while True:
+    while True:
 
-    # ######################################################
-    # ## NUEVO: OYENTE DE COMANDOS DEL ARDUINO ##
-    # ######################################################
-    if arduino and arduino.in_waiting > 0:
-        # Lee el comando enviado desde Arduino sin bloquear el script
-        comando_arduino = arduino.readline().decode('utf-8').strip()
+        # ######################################################
+        # ## NUEVO: OYENTE DE COMANDOS DEL ARDUINO ##
+        # ######################################################
+        if arduino and arduino.in_waiting > 0:
+            # Lee el comando enviado desde Arduino sin bloquear el script
+            comando_arduino = arduino.readline().decode('utf-8').strip()
+            
+            if comando_arduino == "NAVIGATING":
+                print("\nINFO: Recibido comando para entrar en modo navegación.")
+                resetear_log()
+
+        t_start = time.perf_counter()
+
+        # (El código para cargar el frame se mantiene igual)
+        if source_type == 'image' or source_type == 'folder':
+            if img_count >= len(imgs_list):
+                print('All images have been processed. Exiting program.')
+                sys.exit(0)
+            img_filename = imgs_list[img_count]
+            frame = cv2.imread(img_filename)
+            img_count = img_count + 1
+        elif source_type == 'video':
+            ret, frame = cap.read()
+            if not ret:
+                print('Reached end of the video file. Exiting program.')
+                break
+        elif source_type == 'usb':
+            ret, frame = cap.read()
+            if (frame is None) or (not ret):
+                print('Unable to read frames from the camera. This indicates the camera is disconnected or not working. Exiting program.')
+                break
+        elif source_type == 'picamera':
+            frame = cap.capture_array()
+            if (frame is None):
+                print('Unable to read frames from the Picamera. This indicates the camera is disconnected or not working. Exiting program.')
+                break
+
+        if resize:
+            frame = cv2.resize(frame, (resW, resH))
+
+        # En tu bucle principal
+        t_inferencia_inicio = time.perf_counter()
+        # Run inference on frame
+        results = model(frame, verbose=False)
+        t_inferencia_fin = time.perf_counter()
+        print(f"Tiempo de inferencia: {t_inferencia_fin - t_inferencia_inicio:.4f} segundos")
+
+        detections = results[0].boxes
+        object_count = 0
+
+        # ######################################################
+        # ## DIBUJAR EL GRID EN LA IMAGEN ##
+        # ######################################################
+        # Dibuja el borde exterior del grid
+        pt1 = (ORIGEN_X, ORIGEN_Y)
+        pt2 = (int(ORIGEN_X + GRID_WIDTH_PX), int(ORIGEN_Y + GRID_HEIGHT_PX))
+        cv2.rectangle(frame, pt1, pt2, (0, 255, 0), 2)
+
+        #Dibuja las líneas internas (opcional, puede ser pesado visualmente)
+        for row in range(1, GRID_ROWS_CM):
+            y = int(ORIGEN_Y + row * CELL_HEIGHT_PX)
+            cv2.line(frame, (ORIGEN_X, y), (int(ORIGEN_X + GRID_WIDTH_PX), y), (0, 255, 0), 1)
+        for col in range(1, GRID_COLS_CM):
+            x = int(ORIGEN_X + col * CELL_WIDTH_PX)
+            cv2.line(frame, (x, ORIGEN_Y), (x, int(ORIGEN_Y + GRID_HEIGHT_PX)), (0, 255, 0), 1)
+
+        # Go through each detection
+        for i in range(len(detections)):
+            xyxy_tensor = detections[i].xyxy.cpu()
+            xyxy = xyxy_tensor.numpy().squeeze()
+            xmin, ymin, xmax, ymax = xyxy.astype(int)
+
+            centerX = int((xmin + xmax) / 2)
+            centerY = int((ymin + ymax) / 2)
+
+            cv2.circle(frame, (centerX, centerY), 5, (0, 0, 255), -1)
+
+            classidx = int(detections[i].cls.item())
+            classname = labels[classidx]
+            conf = detections[i].conf.item()
+
+            if conf > min_thresh:
+                object_count += 1
+                color = bbox_colors[classidx % 10]
+                cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), color, 2)
+                label = f'{classname}: {int(conf*100)}%'
+                labelSize, baseLine = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+                label_ymin = max(ymin, labelSize[1] + 10)
+                cv2.rectangle(frame, (xmin, label_ymin - labelSize[1] - 10), (xmin + labelSize[0], label_ymin + baseLine - 10), color, cv2.FILLED)
+                cv2.putText(frame, label, (xmin, label_ymin - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+
+                # ######################################################
+                # ## LÓGICA DE DETECCIÓN Y ATAQUE ##
+                # ######################################################
+                if classname == TARGET_CLASS and arduino is not None:
+                    # --- NUEVO: Verificar si la detección está DENTRO del grid ---
+                    is_inside_grid = (ORIGEN_X <= centerX < ORIGEN_X + GRID_WIDTH_PX) and \
+                                    (ORIGEN_Y <= centerY < ORIGEN_Y + GRID_HEIGHT_PX)
+
+                    if is_inside_grid:
+                        # Calcular coordenadas relativas al origen del grid
+                        relative_x = centerX - ORIGEN_X
+                        relative_y = centerY - ORIGEN_Y
+
+                        # Calcular en qué celda está el objeto
+                        grid_col = int(relative_x // CELL_WIDTH_PX)
+                        grid_row = int(relative_y // CELL_HEIGHT_PX)
+                        grid_position = grid_row * GRID_COLS_CM + grid_col
+
+                        if grid_position not in posiciones_atacadas_log:
+                    
+                            # (Envío del comando "ATTACK" al Arduino)
+                            command = f"ATTACK,{grid_position}\n"
+                            arduino.write(command.encode('utf-8'))
+                            print(f"¡{TARGET_CLASS} en celda {grid_position}! Enviando comando...")
+                            cv2.putText(frame, f"ATTACK: {grid_position}", (centerX, centerY - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+
+                        # ######################################################
+                        # ## NUEVO: BUCLE DE ESPERA DE CONFIRMACIÓN ##
+                        # ######################################################
+                        print("⏳ Esperando confirmación del Arduino...")
+                        
+                        # Pausar el video temporalmente mostrando un mensaje
+                        overlay = frame.copy()
+                        cv2.putText(overlay, "ATACANDO...", (resW // 2 - 100, resH // 2), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 3)
+                        cv2.imshow('YOLO detection results', overlay)
+                        cv2.waitKey(1) # Esencial para que el overlay se muestre
+                        
+                        t_espera_inicio = time.perf_counter()
+                        response = arduino.readline().decode('utf-8').strip()
+                        t_espera_fin = time.perf_counter()
+                        print(f"Tiempo de espera del Arduino: {t_espera_fin - t_espera_inicio:.4f} segundos")
+
+                        if response == "DONE":
+                            print("Confirmación recibida. Guardando en el log permanente.")
+                            posiciones_atacadas_log[grid_position] = time.strftime("%Y-%m-%d %H:%M:%S")
+                            guardar_log_ataques(LOG_FILE, posiciones_atacadas_log)
+                        else:
+                            print(f"Timeout o respuesta inesperada: '{response}'.")
+                        break 
+
+        if source_type in ['video', 'usb', 'picamera']:
+            cv2.putText(frame, f'FPS: {avg_frame_rate:0.2f}', (10, 20), cv2.FONT_HERSHEY_SIMPLEX, .7, (0, 255, 255), 2)
         
-        if comando_arduino == "NAVIGATING":
-            print("\nINFO: Recibido comando para entrar en modo navegación.")
-            resetear_log()
+        cv2.putText(frame, f'Number of objects: {object_count}', (10, 40), cv2.FONT_HERSHEY_SIMPLEX, .7, (0, 255, 255), 2)
+        
+        # --- NUEVO: Actualizar el fotograma para el streaming ---
+        # Después de dibujar todo en el 'frame', lo compartimos con el servidor
+        with lock:
+            output_frame = frame.copy() 
 
-    t_start = time.perf_counter()
+        cv2.imshow('YOLO detection results', frame)
+        if record: recorder.write(frame)
 
-    # (El código para cargar el frame se mantiene igual)
-    if source_type == 'image' or source_type == 'folder':
-        if img_count >= len(imgs_list):
-            print('All images have been processed. Exiting program.')
-            sys.exit(0)
-        img_filename = imgs_list[img_count]
-        frame = cv2.imread(img_filename)
-        img_count = img_count + 1
-    elif source_type == 'video':
-        ret, frame = cap.read()
-        if not ret:
-            print('Reached end of the video file. Exiting program.')
+        # --- INICIO DEL BLOQUE PARA LIMITAR FPS ---
+        target_frame_duration = 1 / TARGET_FPS
+        elapsed_time = time.perf_counter() - t_start
+        
+        # Calcula el tiempo que falta para completar el segundo y haz una pausa
+        sleep_time = target_frame_duration - elapsed_time
+        if sleep_time > 0:
+            time.sleep(sleep_time)
+
+        # El cálculo de FPS ahora debería ser cercano a 1
+        t_stop = time.perf_counter()
+        frame_rate_calc = 1 / (t_stop - t_start)
+        # --- FIN DEL BLOQUE PARA LIMITAR FPS ---
+
+        # Cambiamos waitKey a 1ms para que la ventana no se congele
+        key = cv2.waitKey(1) 
+
+        if key == ord('q') or key == ord('Q'): # Press 'q' to quit
             break
-    elif source_type == 'usb':
-        ret, frame = cap.read()
-        if (frame is None) or (not ret):
-            print('Unable to read frames from the camera. This indicates the camera is disconnected or not working. Exiting program.')
-            break
-    elif source_type == 'picamera':
-        frame = cap.capture_array()
-        if (frame is None):
-            print('Unable to read frames from the Picamera. This indicates the camera is disconnected or not working. Exiting program.')
-            break
+        elif key == ord('s') or key == ord('S'): # Press 's' to pause inference
+            cv2.waitKey()
+        elif key == ord('p') or key == ord('P'): # Press 'p' to save a picture of results on this frame
+            cv2.imwrite('capture.png',frame)
+        
+        # Append FPS result to frame_rate_buffer (for finding average FPS over multiple frames)
+        if len(frame_rate_buffer) >= fps_avg_len:
+            temp = frame_rate_buffer.pop(0)
+            frame_rate_buffer.append(frame_rate_calc)
+        else:
+            frame_rate_buffer.append(frame_rate_calc)
 
-    if resize:
-        frame = cv2.resize(frame, (resW, resH))
-
-    # En tu bucle principal
-    t_inferencia_inicio = time.perf_counter()
-    # Run inference on frame
-    results = model(frame, verbose=False)
-    t_inferencia_fin = time.perf_counter()
-    print(f"Tiempo de inferencia: {t_inferencia_fin - t_inferencia_inicio:.4f} segundos")
-
-    detections = results[0].boxes
-    object_count = 0
-
-    # ######################################################
-    # ## DIBUJAR EL GRID EN LA IMAGEN ##
-    # ######################################################
-    # Dibuja el borde exterior del grid
-    pt1 = (ORIGEN_X, ORIGEN_Y)
-    pt2 = (int(ORIGEN_X + GRID_WIDTH_PX), int(ORIGEN_Y + GRID_HEIGHT_PX))
-    cv2.rectangle(frame, pt1, pt2, (0, 255, 0), 2)
-
-    #Dibuja las líneas internas (opcional, puede ser pesado visualmente)
-    for row in range(1, GRID_ROWS_CM):
-        y = int(ORIGEN_Y + row * CELL_HEIGHT_PX)
-        cv2.line(frame, (ORIGEN_X, y), (int(ORIGEN_X + GRID_WIDTH_PX), y), (0, 255, 0), 1)
-    for col in range(1, GRID_COLS_CM):
-        x = int(ORIGEN_X + col * CELL_WIDTH_PX)
-        cv2.line(frame, (x, ORIGEN_Y), (x, int(ORIGEN_Y + GRID_HEIGHT_PX)), (0, 255, 0), 1)
-
-    # Go through each detection
-    for i in range(len(detections)):
-        xyxy_tensor = detections[i].xyxy.cpu()
-        xyxy = xyxy_tensor.numpy().squeeze()
-        xmin, ymin, xmax, ymax = xyxy.astype(int)
-
-        centerX = int((xmin + xmax) / 2)
-        centerY = int((ymin + ymax) / 2)
-
-        cv2.circle(frame, (centerX, centerY), 5, (0, 0, 255), -1)
-
-        classidx = int(detections[i].cls.item())
-        classname = labels[classidx]
-        conf = detections[i].conf.item()
-
-        if conf > min_thresh:
-            object_count += 1
-            color = bbox_colors[classidx % 10]
-            cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), color, 2)
-            label = f'{classname}: {int(conf*100)}%'
-            labelSize, baseLine = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-            label_ymin = max(ymin, labelSize[1] + 10)
-            cv2.rectangle(frame, (xmin, label_ymin - labelSize[1] - 10), (xmin + labelSize[0], label_ymin + baseLine - 10), color, cv2.FILLED)
-            cv2.putText(frame, label, (xmin, label_ymin - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
-
-            # ######################################################
-            # ## LÓGICA DE DETECCIÓN Y ATAQUE ##
-            # ######################################################
-            if classname == TARGET_CLASS and arduino is not None:
-                # --- NUEVO: Verificar si la detección está DENTRO del grid ---
-                is_inside_grid = (ORIGEN_X <= centerX < ORIGEN_X + GRID_WIDTH_PX) and \
-                                (ORIGEN_Y <= centerY < ORIGEN_Y + GRID_HEIGHT_PX)
-
-                if is_inside_grid:
-                    # Calcular coordenadas relativas al origen del grid
-                    relative_x = centerX - ORIGEN_X
-                    relative_y = centerY - ORIGEN_Y
-
-                    # Calcular en qué celda está el objeto
-                    grid_col = int(relative_x // CELL_WIDTH_PX)
-                    grid_row = int(relative_y // CELL_HEIGHT_PX)
-                    grid_position = grid_row * GRID_COLS_CM + grid_col
-
-                    if grid_position not in posiciones_atacadas_log:
-                
-                        # (Envío del comando "ATTACK" al Arduino)
-                        command = f"ATTACK,{grid_position}\n"
-                        arduino.write(command.encode('utf-8'))
-                        print(f"¡{TARGET_CLASS} en celda {grid_position}! Enviando comando...")
-                        cv2.putText(frame, f"ATTACK: {grid_position}", (centerX, centerY - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-
-                    # ######################################################
-                    # ## NUEVO: BUCLE DE ESPERA DE CONFIRMACIÓN ##
-                    # ######################################################
-                    print("⏳ Esperando confirmación del Arduino...")
-                    
-                    # Pausar el video temporalmente mostrando un mensaje
-                    overlay = frame.copy()
-                    cv2.putText(overlay, "ATACANDO...", (resW // 2 - 100, resH // 2), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 3)
-                    cv2.imshow('YOLO detection results', overlay)
-                    cv2.waitKey(1) # Esencial para que el overlay se muestre
-                    
-                    t_espera_inicio = time.perf_counter()
-                    response = arduino.readline().decode('utf-8').strip()
-                    t_espera_fin = time.perf_counter()
-                    print(f"Tiempo de espera del Arduino: {t_espera_fin - t_espera_inicio:.4f} segundos")
-
-                    if response == "DONE":
-                        print("Confirmación recibida. Guardando en el log permanente.")
-                        posiciones_atacadas_log[grid_position] = time.strftime("%Y-%m-%d %H:%M:%S")
-                        guardar_log_ataques(LOG_FILE, posiciones_atacadas_log)
-                    else:
-                        print(f"Timeout o respuesta inesperada: '{response}'.")
-                    break 
-
-    if source_type in ['video', 'usb', 'picamera']:
-        cv2.putText(frame, f'FPS: {avg_frame_rate:0.2f}', (10, 20), cv2.FONT_HERSHEY_SIMPLEX, .7, (0, 255, 255), 2)
-    
-    cv2.putText(frame, f'Number of objects: {object_count}', (10, 40), cv2.FONT_HERSHEY_SIMPLEX, .7, (0, 255, 255), 2)
-    cv2.imshow('YOLO detection results', frame)
-    if record: recorder.write(frame)
-
-    # --- INICIO DEL BLOQUE PARA LIMITAR FPS ---
-    target_frame_duration = 1 / TARGET_FPS
-    elapsed_time = time.perf_counter() - t_start
-    
-    # Calcula el tiempo que falta para completar el segundo y haz una pausa
-    sleep_time = target_frame_duration - elapsed_time
-    if sleep_time > 0:
-        time.sleep(sleep_time)
-
-    # El cálculo de FPS ahora debería ser cercano a 1
-    t_stop = time.perf_counter()
-    frame_rate_calc = 1 / (t_stop - t_start)
-    # --- FIN DEL BLOQUE PARA LIMITAR FPS ---
-
-    # Cambiamos waitKey a 1ms para que la ventana no se congele
-    key = cv2.waitKey(1) 
-
-    if key == ord('q') or key == ord('Q'): # Press 'q' to quit
-        break
-    elif key == ord('s') or key == ord('S'): # Press 's' to pause inference
-        cv2.waitKey()
-    elif key == ord('p') or key == ord('P'): # Press 'p' to save a picture of results on this frame
-        cv2.imwrite('capture.png',frame)
-    
-    # Append FPS result to frame_rate_buffer (for finding average FPS over multiple frames)
-    if len(frame_rate_buffer) >= fps_avg_len:
-        temp = frame_rate_buffer.pop(0)
-        frame_rate_buffer.append(frame_rate_calc)
-    else:
-        frame_rate_buffer.append(frame_rate_calc)
-
-    # Calculate average FPS for past frames
-    avg_frame_rate = np.mean(frame_rate_buffer)
+        # Calculate average FPS for past frames
+        avg_frame_rate = np.mean(frame_rate_buffer)
 
 # ######################################################
 # ## LIMPIEZA DE RECURSOS ##
