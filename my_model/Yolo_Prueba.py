@@ -3,10 +3,10 @@ import sys
 import argparse
 import glob
 import time
-import serial # <--- NUEVA IMPORTACIÓN
+import serial 
 import json
-import threading # <--- NUEVA IMPORTACIÓN
-from flask import Response, Flask # <--- NUEVAS IMPORTACIONES
+import threading
+from flask import Response, Flask
 
 import cv2
 import numpy as np
@@ -18,6 +18,25 @@ lock = threading.Lock()
 # Inicializar la aplicación Flask
 app = Flask(__name__)
 
+# --- INICIO DE LA MODIFICACIÓN 1: Añadir función de recorte ---
+def crop_center(img, crop_width, crop_height):
+    """Recorta la imagen desde el centro a las dimensiones deseadas."""
+    img_height, img_width, _ = img.shape
+    start_x = (img_width - crop_width) // 2
+    start_y = (img_height - crop_height) // 2
+    
+    # Asegurarse de que las coordenadas no sean negativas (si la img es más pequeña que el recorte)
+    if start_x < 0 or start_y < 0:
+        print(f"ADVERTENCIA: La imagen original ({img_width}x{img_height}) es más pequeña que el recorte deseado ({crop_width}x{crop_height}). No se recortará.")
+        return img
+
+    end_x = start_x + crop_width
+    end_y = start_y + crop_height
+    
+    # Realiza el recorte usando slicing de NumPy
+    return img[start_y:end_y, start_x:end_x]
+# --- FIN DE LA MODIFICACIÓN 1 ---
+
 # Define and parse user input arguments
 # (El código de argparse se mantiene igual)
 parser = argparse.ArgumentParser()
@@ -27,7 +46,7 @@ parser.add_argument('--source', help='Image source, can be image file ("test.jpg
                     image folder ("test_dir"), video file ("testvid.mp4"), index of USB camera ("usb0"), or index of Picamera ("picamera0")', 
                     required=True)
 parser.add_argument('--thresh', help='Minimum confidence threshold for displaying detected objects (example: "0.4")',
-                    default=0.5)
+                    default=0.6)
 parser.add_argument('--resolution', help='Resolution in WxH to display inference results at (example: "640x480"), \
                     otherwise, match source resolution',
                     default=None)
@@ -48,8 +67,8 @@ record = args.record
 # ## CONFIGURACIÓN DEL ROBOT Y GRID ##
 # ######################################################
 # Ajusta estos parámetros según tu configuración
-SERIAL_PORT = 'COM7'  # <--- CAMBIA ESTO (ej. 'COM3' en Windows, '/dev/ttyACM0' en Linux)
-BAUD_RATE = 9600
+SERIAL_PORT = 'COM3'  # <--- CAMBIA ESTO (ej. 'COM3' en Windows, '/dev/ttyACM0' en Linux)
+BAUD_RATE = 115200
 TARGET_CLASS = 'Rude' # Nombre de la clase de maleza en tu modelo YOLO
 SERIAL_TIMEOUT = 10
 
@@ -145,7 +164,6 @@ except KeyError as e:
     print(f"⚠️ ERROR: La clave {e} no se encontró en el archivo de configuración. Abortando.")
     sys.exit(1)
 
-ATTACK_COOLDOWN = 5 # Segundos de espera antes de poder atacar la misma celda de nuevo
 TARGET_FPS = 25
 
 # ######################################################
@@ -259,7 +277,7 @@ if arduino:
                 break # Sale del bucle de espera y continúa con el script
         
         time.sleep(0.1) # Pequeña pausa para no saturar el CPU
-
+#
 # ######################################################
 # ## PRE-CÁLCULO DEL GRID Y VARIABLES DE CONTROL ##
 # ######################################################
@@ -285,14 +303,14 @@ while True:
     # ######################################################
     # ## NUEVO: OYENTE DE COMANDOS DEL ARDUINO ##
     # ######################################################
-    if arduino and arduino.in_waiting > 0:
-        # Lee el comando enviado desde Arduino sin bloquear el script
-        comando_arduino = arduino.readline().decode('utf-8').strip()
-        
-        if comando_arduino == "NAVIGATING":
-            print("\nINFO: Recibido comando para entrar en modo navegación.")
-            resetear_log()
-
+    #if arduino and arduino.in_waiting > 0:
+    #   # Lee el comando enviado desde Arduino sin bloquear el script
+    #  comando_arduino = arduino.readline().decode('utf-8').strip()
+    #  
+    #  #if comando_arduino == "NAVIGATING":
+    #  #   print("\nINFO: Recibido comando para entrar en modo navegación.")
+    #  #   resetear_log()
+#
     t_start = time.perf_counter()
 
     # (El código para cargar el frame se mantiene igual)
@@ -319,15 +337,18 @@ while True:
             print('Unable to read frames from the Picamera. This indicates the camera is disconnected or not working. Exiting program.')
             break
 
-    if resize:
-        frame = cv2.resize(frame, (resW, resH))
+    # --- INICIO DE LA MODIFICACIÓN 2: Recortar la imagen ---
+    # Se recorta la imagen a 1280x360 desde el centro para evitar distorsión.
+    # Esto ignora el argumento --resolution en favor de un recorte fijo.
+    frame = crop_center(frame, 1280, 400)
+    # --- FIN DE LA MODIFICACIÓN 2 ---
 
     # En tu bucle principal
-    t_inferencia_inicio = time.perf_counter()
+    #t_inferencia_inicio = time.perf_counter()
     # Run inference on frame
     results = model(frame, verbose=False)
-    t_inferencia_fin = time.perf_counter()
-    print(f"Tiempo de inferencia: {t_inferencia_fin - t_inferencia_inicio:.4f} segundos")
+    #t_inferencia_fin = time.perf_counter()
+    #print(f"Tiempo de inferencia: {t_inferencia_fin - t_inferencia_inicio:.4f} segundos")
 
     detections = results[0].boxes
     object_count = 0
@@ -379,7 +400,7 @@ while True:
             if classname == TARGET_CLASS and arduino is not None:
                 # --- NUEVO: Verificar si la detección está DENTRO del grid ---
                 is_inside_grid = (ORIGEN_X <= centerX < ORIGEN_X + GRID_WIDTH_PX) and \
-                                (ORIGEN_Y <= centerY < ORIGEN_Y + GRID_HEIGHT_PX)
+                                 (ORIGEN_Y <= centerY < ORIGEN_Y + GRID_HEIGHT_PX)
 
                 if is_inside_grid:
                     # Calcular coordenadas relativas al origen del grid
@@ -390,38 +411,34 @@ while True:
                     grid_col = int(relative_x // CELL_WIDTH_PX)
                     grid_row = int(relative_y // CELL_HEIGHT_PX)
                     grid_position = grid_row * GRID_COLS_CM + grid_col
-
+                        
                     if grid_position not in posiciones_atacadas_log:
-                
+                        
                         # (Envío del comando "ATTACK" al Arduino)
                         command = f"ATTACK,{grid_position}\n"
-                        arduino.write(command.encode('utf-8'))
+                        arduino.write(command.encode('utf-8')) 
                         print(f"¡{TARGET_CLASS} en celda {grid_position}! Enviando comando...")
                         cv2.putText(frame, f"ATTACK: {grid_position}", (centerX, centerY - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
-                    # ######################################################
-                    # ## NUEVO: BUCLE DE ESPERA DE CONFIRMACIÓN ##
-                    # ######################################################
-                    print("⏳ Esperando confirmación del Arduino...")
-                    
-                    # Pausar el video temporalmente mostrando un mensaje
-                    overlay = frame.copy()
-                    cv2.putText(overlay, "ATACANDO...", (resW // 2 - 100, resH // 2), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 3)
-                    cv2.imshow('YOLO detection results', overlay)
-                    cv2.waitKey(1) # Esencial para que el overlay se muestre
-                    
-                    t_espera_inicio = time.perf_counter()
-                    response = arduino.readline().decode('utf-8').strip()
-                    t_espera_fin = time.perf_counter()
-                    print(f"Tiempo de espera del Arduino: {t_espera_fin - t_espera_inicio:.4f} segundos")
-
-                    if response == "DONE":
-                        print("Confirmación recibida. Guardando en el log permanente.")
-                        posiciones_atacadas_log[grid_position] = time.strftime("%Y-%m-%d %H:%M:%S")
-                        guardar_log_ataques(LOG_FILE, posiciones_atacadas_log)
-                    else:
-                        print(f"Timeout o respuesta inesperada: '{response}'.")
-                    break 
+                        # ######################################################
+                        # ## NUEVO: BUCLE DE ESPERA DE CONFIRMACIÓN ##
+                        # ######################################################
+                        print("⏳ Esperando confirmación del Arduino...")
+                        # Pausar el video temporalmente mostrando un mensaje
+                        overlay = frame.copy()
+                        # Obtener dimensiones del frame para centrar el texto
+                        frame_h, frame_w, _ = frame.shape
+                        cv2.putText(overlay, "ATACANDO...", (frame_w // 2 - 100, frame_h // 2), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 3)
+                        cv2.imshow('YOLO detection results', overlay)
+                        cv2.waitKey(1) # Esencial para que el overlay se muestre
+                        
+                        while True:
+                            response = arduino.readline().decode('utf-8').strip()
+                            if response == "DONE":
+                                print("Confirmación recibida. Guardando en el log permanente.")
+                                posiciones_atacadas_log[grid_position] = time.strftime("%Y-%m-%d %H:%M:%S")
+                                guardar_log_ataques(LOG_FILE, posiciones_atacadas_log)
+                                break                           
 
     if source_type in ['video', 'usb', 'picamera']:
         cv2.putText(frame, f'FPS: {avg_frame_rate:0.2f}', (10, 20), cv2.FONT_HERSHEY_SIMPLEX, .7, (0, 255, 255), 2)

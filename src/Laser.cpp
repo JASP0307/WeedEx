@@ -5,7 +5,7 @@ Laser::Laser(uint8_t pin) {
     _pin = pin;
     // Configurar el pin como una salida digital
     pinMode(_pin, OUTPUT);
-    // Por seguridad, siempre empezamos con el láser apagado.
+    // Por seguridad, siempre empezamos con el láser apagado.F
     // Llamamos a nuestro propio método off() para asegurar que el estado sea consistente.
     off();
 }

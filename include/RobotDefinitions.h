@@ -92,7 +92,7 @@ float VELOCIDAD_CRUCERO = 10.0;
 
 // --- LÓGICA DEL BRAZO DELTA ---
 // Parámetros físicos y de compensación
-DeltaKinematics DK(52, 113, 37, 63);
+
 const int SERVO1_HORIZONTAL = 172; 
 const int SERVO2_HORIZONTAL = 168;
 const int SERVO3_HORIZONTAL = 178;

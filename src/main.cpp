@@ -58,6 +58,8 @@ Laser Laser_01(Pinout::Laser::Laser_1);
 TickType_t obstacleEntryTime = 0;
 TickType_t laserStartTime  = 0;
 TickType_t g_rakeStartTime = 0;
+TaskHandle_t xHandleDelta;
+TaskHandle_t xHandleServos;
 
 // Prototipos de tareas
 void TaskFSM(void *pvParameters);
@@ -76,7 +78,7 @@ void delta_moveTo_Compensated(double userX, double userY, double userZ);
 
 // Funciones auxiliares
 RobotState getState();
-
+DeltaKinematics DK(52, 113, 37, 63);
 void setState(RobotState newState);
 
 void setup() {
@@ -132,22 +134,21 @@ void setup() {
   motorDer.activarPID(true);
 
   
-  //SERV_01.begin();
-  Serial.println("Motores inicializados");
   
+  Serial.println("Motores inicializados");
+ 
   // Crear tareas
   xTaskCreate(TaskFSM,                    "FSM",        512, NULL, 3, NULL);
   xTaskCreate(TaskLocomotion,             "Locomotion", 256, NULL, 1, NULL);
   xTaskCreate(TaskSensors,                "Sensors",    256, NULL, 2, NULL);
   xTaskCreate(TaskBattery,                "Battery",    128, NULL, 2, NULL);
   xTaskCreate(TaskComms,                  "Comms", 256, NULL, 2, NULL);
-  xTaskCreate(TaskServoControl,           "ServoControl", 256, NULL, 3, NULL);
+  xTaskCreate(TaskServoControl,           "ServoControl", 256, NULL, 3, &xHandleServos);
   xTaskCreate(TaskBluetoothCommunication, "Bluetooth Test Task", 1024, NULL, 2, NULL);
-  xTaskCreate(TaskDeltaControl,           "DeltaControl", 256, NULL, 2, NULL);
+  xTaskCreate(TaskDeltaControl,           "DeltaControl", 256, NULL, 2, &xHandleDelta);
   
   Serial.println("Tareas FreeRTOS creadas");
-
-  lowBatteryBlinkTimer = xTimerCreate("LED Blink Timer", pdMS_TO_TICKS(500), pdTRUE, (void *) 0, ledBlinkCallback);
+//lowBatteryBlinkTimer = xTimerCreate("LED Blink Timer", pdMS_TO_TICKS(500), pdTRUE, (void *) 0, ledBlinkCallback);
 
   Serial.println("Timers FreeRTOS creados");
 }
@@ -211,26 +212,26 @@ void setBaseSpeed(float newSpeed) {
 
 void poblarGrid() {
 
-    grid[0] = { 15.00, -90.00, -90.00 };
-    grid[1] = { 5.00, -80.00, -100.00 };
-    grid[2] = { 5.00, -80.00, -90.00 };
-    grid[3] = { 5.00, -80.00, -75.00 };
-    grid[4] = { 5.00, -80.00, -65.00 };
-    grid[5] = { -60.00, -45.00, -80.00 };
-    grid[6] = { -50.00, -25.00, -100.00 };
-    grid[7] = { -50.00, -10.00, -120.00 };
-    grid[8] = { -60.00, -0.00, -110.00 };
-    grid[9] = { -90.00, 15.00, -65.00 };
-    grid[10] = {  00.00, -100.00, -75.00 };
-    grid[11] = { -15.00, -100.00, -75.00 };
-    grid[12] = { -5.00, -95.00, -70.00 };
-    grid[13] = { -10.00, -90.00, -55.00 };
-    grid[14] = { -75.00, -55.00, -60.00 };
-    grid[15] = { -75.00, -55.00, -60.00 };
-    grid[16] = { -55.00, -40.00, -100.00 };
-    grid[17] = { -40.00, -35.00, -110.00 };
-    grid[18] = { -75.00, -20.00, -100.00 };
-    grid[19] = { -90.00, -5.00, -110.00 };
+    grid[19] = { 15.00, -90.00, -90.00 };
+    grid[18] = { 5.00, -80.00, -100.00 };
+    grid[17] = { 5.00, -80.00, -90.00 };
+    grid[16] = { 5.00, -80.00, -75.00 };
+    grid[15] = { 5.00, -80.00, -65.00 };
+    grid[14] = { -60.00, -45.00, -80.00 };
+    grid[13] = { -50.00, -25.00, -100.00 };
+    grid[12] = { -50.00, -10.00, -120.00 };
+    grid[11] = { -60.00, -0.00, -110.00 };
+    grid[10] = { -90.00, 15.00, -65.00 };
+    grid[9] = {  00.00, -100.00, -75.00 };
+    grid[8] = { -15.00, -100.00, -75.00 };
+    grid[7] = { -5.00, -95.00, -70.00 };
+    grid[6] = { -10.00, -90.00, -55.00 };
+    grid[5] = { -75.00, -55.00, -60.00 };
+    grid[4] = { -75.00, -55.00, -60.00 };
+    grid[3] = { -55.00, -40.00, -100.00 };
+    grid[2] = { -40.00, -35.00, -110.00 };
+    grid[1] = { -75.00, -20.00, -100.00 };
+    grid[0] = { -90.00, -5.00, -110.00 };
 
     //Serial.println("Grid de ataque poblado.");
 }
@@ -274,7 +275,7 @@ void delta_moveTo(double x, double y, double z) {
 }
 
 // Declara el manejador del timer globalmente o antes de tu tarea
-TimerHandle_t lowBatteryBlinkTimer;
+//TimerHandle_t lowBatteryBlinkTimer;
 
 // Esta función es el "callback" del timer. Se ejecuta periódicamente.
 void ledBlinkCallback(TimerHandle_t xTimer) {
@@ -283,11 +284,14 @@ void ledBlinkCallback(TimerHandle_t xTimer) {
 }
 
 void onEnterIdle() {
-  Serial.println("Entrando en IDLE");
+  //Serial.println("Entrando en IDLE");
   motorIzq.establecerSetpoint(0);
   motorDer.establecerSetpoint(0);
+  vTaskDelay(pdMS_TO_TICKS(3000));
+  //vTaskSuspend( xHandleDelta );
+  //vTaskSuspend( xHandleServos );
   digitalWrite(Pinout::TiraLED::LEDs, HIGH);
-
+  //Laser_01.on();
   if (motorIzq.pidEstaActivo()) {
       motorIzq.activarPID(false);
       motorDer.activarPID(false);
@@ -295,8 +299,9 @@ void onEnterIdle() {
 }
 
 void onEnterNavigating() {
-  //Serial.println("Entrando en NAVIGATING");
+  Serial.println("START_DETECTION");
   vTaskDelay(pdMS_TO_TICKS(3000)); 
+  Serial.println("NAVIGATING");
   if (!motorIzq.pidEstaActivo()) {
       motorIzq.activarPID(true);
       motorDer.activarPID(true);
@@ -334,6 +339,8 @@ void onEnterReturningHome() {
 
 void onEnterMovingToWeed() {
   //Serial.println("Entrando en MOVING_TO_WEED");
+  //vTaskResume( xHandleDelta );
+  //vTaskResume( xHandleServos );
   motorIzq.establecerSetpoint(0);
   motorDer.establecerSetpoint(0);
 }
@@ -452,13 +459,13 @@ void TaskFSM(void *pvParameters) {
 
 void TaskServoControl(void *pvParameters) {
   (void) pvParameters;
-  //delta_init();
+  delta_init();
   vTaskDelay(pdMS_TO_TICKS(1000)); 
 
   for (;;) {
-    //SERV_01.update();
-    //SERV_02.update();
-    //SERV_03.update();
+    SERV_01.update();
+    SERV_02.update();
+    SERV_03.update();
     //SERV_04.update();
     vTaskDelay(pdMS_TO_TICKS(25)); 
   }
@@ -558,7 +565,7 @@ void TaskDeltaControl(void *pvParameters){
         Serial.println("DONE");
         
       } else {
-        Serial.println("ERROR: Índice de grid inválido recibido.");
+        //Serial.println("ERROR: Índice de grid inválido recibido.");
       }
     }
   }
@@ -670,17 +677,17 @@ void TaskComms(void *pvParameters) {
       if (msg.equals("CMD,NAVIGATE")) {
         FSMEvent e = EVENT_NAVIGATE;
         xQueueSend(fsmQueue, &e, 0);
-        Serial.println("ACK,NAVIGATE");
+        //Serial.println("ACK,NAVIGATE");
       } 
       else if (msg.equals("CMD,STOP")) {
         FSMEvent e = EVENT_STOP;
         xQueueSend(fsmQueue, &e, 0);
-        Serial.println("ACK,STOP");
+        //Serial.println("ACK,STOP");
       }
       else if (msg.equals("CMD,RESUME")) {
         FSMEvent e = EVENT_RESUME;
         xQueueSend(fsmQueue, &e, 0);
-        Serial.println("ACK,RESUME");
+        //Serial.println("ACK,RESUME");
       }
       else if (msg.startsWith("ATTACK,")) {
         String indexStr = msg.substring(7); // "ATTACK," tiene 7 caracteres
@@ -688,22 +695,22 @@ void TaskComms(void *pvParameters) {
         
         // Enviar el índice a la cola del brazo delta
         if (xQueueSend(deltaQueue, &grid_index, pdMS_TO_TICKS(100)) == pdPASS) {
-            Serial.println("ACK,ATTACK_CMD_RECEIVED");
+            //Serial.println("ACK,ATTACK_CMD_RECEIVED");
         } else {
-            Serial.println("ERROR,DELTA_QUEUE_FULL");
+            //Serial.println("ERROR,DELTA_QUEUE_FULL");
         }
       }
       else {
-        Serial.println("ERROR,UNKNOWN_CMD");
+        //Serial.println("ERROR,UNKNOWN_CMD");
       }
     }
     
     // Enviar heartbeat periódico usando FreeRTOS ticks
     if ((xTaskGetTickCount() - lastHeartbeat) > pdMS_TO_TICKS(5000)) {
       RobotState state = getState();
-      Serial.print("HEARTBEAT,");
-      Serial.print(state);
-      Serial.println();
+      //Serial.print("HEARTBEAT,");
+      //Serial.print(state);
+      //Serial.println();
       lastHeartbeat = xTaskGetTickCount();
     }
 
