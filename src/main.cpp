@@ -61,10 +61,6 @@ TickType_t g_rakeStartTime = 0;
 TaskHandle_t xHandleDelta;
 TaskHandle_t xHandleServos;
 
-// --- LÓGICA DEL BRAZO DELTA ---
-// Parámetros físicos y de compensación
-DeltaKinematics DK(52, 113, 37, 63);
-
 // Prototipos de tareas
 void TaskFSM(void *pvParameters);
 void TaskLocomotion(void *pvParameters);
