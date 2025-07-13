@@ -59,6 +59,10 @@ TickType_t obstacleEntryTime = 0;
 TickType_t laserStartTime  = 0;
 TickType_t g_rakeStartTime = 0;
 
+// --- LÓGICA DEL BRAZO DELTA ---
+// Parámetros físicos y de compensación
+DeltaKinematics DK(52, 113, 37, 63);
+
 // Prototipos de tareas
 void TaskFSM(void *pvParameters);
 void TaskLocomotion(void *pvParameters);
@@ -147,7 +151,7 @@ void setup() {
   
   Serial.println("Tareas FreeRTOS creadas");
 
-  lowBatteryBlinkTimer = xTimerCreate("LED Blink Timer", pdMS_TO_TICKS(500), pdTRUE, (void *) 0, ledBlinkCallback);
+  //lowBatteryBlinkTimer = xTimerCreate("LED Blink Timer", pdMS_TO_TICKS(500), pdTRUE, (void *) 0, ledBlinkCallback);
 
   Serial.println("Timers FreeRTOS creados");
 }
@@ -211,26 +215,26 @@ void setBaseSpeed(float newSpeed) {
 
 void poblarGrid() {
 
-    grid[0] = { 15.00, -90.00, -90.00 };
-    grid[1] = { 5.00, -80.00, -100.00 };
-    grid[2] = { 5.00, -80.00, -90.00 };
-    grid[3] = { 5.00, -80.00, -75.00 };
-    grid[4] = { 5.00, -80.00, -65.00 };
-    grid[5] = { -60.00, -45.00, -80.00 };
-    grid[6] = { -50.00, -25.00, -100.00 };
-    grid[7] = { -50.00, -10.00, -120.00 };
-    grid[8] = { -60.00, -0.00, -110.00 };
-    grid[9] = { -90.00, 15.00, -65.00 };
-    grid[10] = {  00.00, -100.00, -75.00 };
-    grid[11] = { -15.00, -100.00, -75.00 };
-    grid[12] = { -5.00, -95.00, -70.00 };
-    grid[13] = { -10.00, -90.00, -55.00 };
-    grid[14] = { -75.00, -55.00, -60.00 };
-    grid[15] = { -75.00, -55.00, -60.00 };
-    grid[16] = { -55.00, -40.00, -100.00 };
-    grid[17] = { -40.00, -35.00, -110.00 };
-    grid[18] = { -75.00, -20.00, -100.00 };
-    grid[19] = { -90.00, -5.00, -110.00 };
+    grid[0] = { 41.00, -83.00, -100.00 };
+    grid[1] = { 26.00, -80.00, -90.00 };
+    grid[2] = { 26.00, -80.00, -75.00 };
+    grid[3] = { 29.00, -80.00, -56.00 };
+    grid[4] = { 6.00, -66.00, -83.00 };
+    grid[5] = { -20.00, -31.00, -100.00 };
+    grid[6] = { -53.00, -19.00, -87.00 };
+    grid[7] = { -63.00, -6.00, -86.00 };
+    grid[8] = { -69.00, 3.00, -86.00 };
+    grid[9] = { -84.00, 15.00, -65.00 };
+    grid[10] = { 15.00, -100.00, -75.00 };
+    grid[11] = { 15.00, -97.00, -66.00 };
+    grid[12] = { 16.00, -92.00, -61.00 };
+    grid[13] = { 14.00, -81.00, -70.00 };
+    grid[14] = { -15.00, -55.00, -102.00 };
+    grid[15] = { -30.00, -43.00, -99.00 };
+    grid[16] = { -46.00, -34.00, -100.00 };
+    grid[17] = { -64.00, -20.00, -95.00 };
+    grid[18] = { -75.00, -8.00, -91.00 };
+    grid[19] = { -93.00, 1.00, -65.00 };
 
     //Serial.println("Grid de ataque poblado.");
 }
@@ -274,7 +278,7 @@ void delta_moveTo(double x, double y, double z) {
 }
 
 // Declara el manejador del timer globalmente o antes de tu tarea
-TimerHandle_t lowBatteryBlinkTimer;
+//TimerHandle_t lowBatteryBlinkTimer;
 
 // Esta función es el "callback" del timer. Se ejecuta periódicamente.
 void ledBlinkCallback(TimerHandle_t xTimer) {
@@ -296,7 +300,7 @@ void onEnterIdle() {
 
 void onEnterNavigating() {
   //Serial.println("Entrando en NAVIGATING");
-  vTaskDelay(pdMS_TO_TICKS(3000)); 
+  vTaskDelay(pdMS_TO_TICKS(3000));
   if (!motorIzq.pidEstaActivo()) {
       motorIzq.activarPID(true);
       motorDer.activarPID(true);

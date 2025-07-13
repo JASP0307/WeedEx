@@ -13,7 +13,7 @@ REM 3. Ejecutar el script de Python con sus argumentos.
 REM Modifica esta línea con los argumentos que necesitas.
 echo Lanzando el script de deteccion...
 cd my_model
-python Yolo_Prueba.py --model my_model.pt --source usb0 --resolution 640x480
+python Yolo_Prueba.py --model my_modelV11.pt --source usb1 --resolution 640x480
 
 REM 4. (Opcional) Pausa para ver errores.
 REM Si la ventana se cierra muy rápido, quita el 'REM' de la línea de abajo para depurar.
