@@ -7,10 +7,12 @@ import serial
 import json
 import threading
 from flask import Response, Flask
+from torchvision import transforms
 
 import cv2
 import numpy as np
 from ultralytics import YOLO
+import torch_directml
 
 # --- NUEVO: Configuración del servidor de streaming ---
 output_frame = None
@@ -185,6 +187,10 @@ if (not os.path.exists(model_path)):
     sys.exit(0)
 
 model = YOLO(model_path, task='detect')
+
+dml_device = torch_directml.device()
+
+model.to('cpu')
 labels = model.names
 
 img_ext_list = ['.jpg','.JPG','.jpeg','.JPEG','.png','.PNG','.bmp','.BMP']
@@ -256,6 +262,7 @@ elif source_type == 'picamera':
     cap = Picamera2()
     cap.configure(cap.create_video_configuration(main={"format": 'RGB888', "size": (resW, resH)}))
     cap.start()
+
 
 # ######################################################
 # ## INICIALIZACIÓN Y CARGA DEL LOG ##
@@ -336,17 +343,19 @@ while True:
         if (frame is None):
             print('Unable to read frames from the Picamera. This indicates the camera is disconnected or not working. Exiting program.')
             break
+    if resize:
+            frame = cv2.resize(frame, (resW, resH))
 
     # --- INICIO DE LA MODIFICACIÓN 2: Recortar la imagen ---
     # Se recorta la imagen a 1280x360 desde el centro para evitar distorsión.
     # Esto ignora el argumento --resolution en favor de un recorte fijo.
-    frame = crop_center(frame, 1280, 400)
+    frame = crop_center(frame, 1280, 480)
     # --- FIN DE LA MODIFICACIÓN 2 ---
 
     # En tu bucle principal
     #t_inferencia_inicio = time.perf_counter()
     # Run inference on frame
-    results = model(frame, verbose=False)
+    results = model(frame, imgsz=512, verbose=False)
     #t_inferencia_fin = time.perf_counter()
     #print(f"Tiempo de inferencia: {t_inferencia_fin - t_inferencia_inicio:.4f} segundos")
 
