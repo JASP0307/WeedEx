@@ -1,7 +1,5 @@
 {
     "pixels_por_cm": 58.0249084445637,
-    "origen_grilla_px": [
-        301,
-        153
-    ]
+    "origen_y_px": 153
+
 }

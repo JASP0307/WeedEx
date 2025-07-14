@@ -300,7 +300,7 @@ void onEnterIdle() {
 
 void onEnterNavigating() {
   Serial.println("START_DETECTION");
-  vTaskDelay(pdMS_TO_TICKS(3000)); 
+  vTaskDelay(pdMS_TO_TICKS(1500)); 
   Serial.println("NAVIGATING");
   if (!motorIzq.pidEstaActivo()) {
       motorIzq.activarPID(true);
@@ -686,6 +686,11 @@ void TaskComms(void *pvParameters) {
       }
       else if (msg.equals("CMD,RESUME")) {
         FSMEvent e = EVENT_RESUME;
+        xQueueSend(fsmQueue, &e, 0);
+        //Serial.println("ACK,RESUME");
+      }
+      else if(msg.equals("NoRude")) {
+        FSMEvent e = EVENT_RAKE_WEED_FOUND;
         xQueueSend(fsmQueue, &e, 0);
         //Serial.println("ACK,RESUME");
       }

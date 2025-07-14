@@ -58,13 +58,13 @@ const int SIMULATED_MOVE_TIME_MS = 3000;
 
 // --- Tiempos de Espera (en milisegundos) ---
 const int OBSTACLE_WAIT_TIME_MS = 5000;
-const int LASER_ON_TIME_MS = 2000;
+const int LASER_ON_TIME_MS = 2500;
 const int RAKE_ACTION_TIME_MS = 5000;
 
 // --- Parámetros de Servos ---
 
-const int POS_INICIAL_RASTRILLO = 90; // Posición de reposo
-const int POS_TRABAJO_RASTRILLO = 10; // Posición para rastrillar
+const int POS_INICIAL_RASTRILLO = 170; // Posición de reposo
+const int POS_TRABAJO_RASTRILLO = 150; // Posición para rastrillar
 
 // --- Parámetros de Divisor de Voltaje ---
 
