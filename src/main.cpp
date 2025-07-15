@@ -306,6 +306,7 @@ void onEnterNavigating() {
       motorIzq.activarPID(true);
       motorDer.activarPID(true);
   }
+  setBaseSpeed(VELOCIDAD_CRUCERO);
   //motorIzq.establecerSetpoint(VELOCIDAD_CRUCERO);
   //motorDer.establecerSetpoint(VELOCIDAD_CRUCERO);
   digitalWrite(Pinout::TiraLED::LEDs, HIGH);
