@@ -5,7 +5,7 @@ def nothing(x):
     pass
 
 # --- CONFIGURACIÓN ---
-CAMERA_INDEX = 0  # Cambia esto al índice de tu cámara si es diferente (ej: 1 para la segunda cámara)
+CAMERA_INDEX = 0 # Cambia esto al índice de tu cámara si es diferente (ej: 1 para la segunda cámara)
 WINDOW_NAME = "HSV Calibrator"
 IMAGE_NAME = "captured_image.png"
 

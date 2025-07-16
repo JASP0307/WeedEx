@@ -15,7 +15,8 @@ enum RobotState {
   RETURNING_HOME,
   ERROR_STATE,
   LOW_BATTERY,
-  OBSTACLE
+  OBSTACLE,
+  ROW_CHANGE
 };
 
 // =================================================================
@@ -35,7 +36,9 @@ typedef enum {
   EVENT_ERROR,
   EVENT_RESUME,
   EVENT_ATTACK_COMPLETE,
-  EVENT_TIMEOUT_OBSTACLE
+  EVENT_TIMEOUT_OBSTACLE,
+  EVENT_IR_SIGNAL_DETECTED,
+  EVENT_ROW_CHANGED
 } FSMEvent;
 
 enum ArmCommand {
@@ -79,7 +82,7 @@ bool g_isRaking = false;
 TickType_t rakeStartTime;
 
 float g_targetYaw = 0.0;      // Rumbo deseado (ej. 0.0 para ir al Norte)
-float g_baseSpeedRPM = 10.0;  // Velocidad base de los motores en RPM
+float g_baseSpeedRPM = 0.1;  // Velocidad base de los motores en RPM
 SemaphoreHandle_t locomotionMutex;
 
 

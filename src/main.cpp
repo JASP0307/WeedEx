@@ -287,11 +287,12 @@ void onEnterIdle() {
   //Serial.println("Entrando en IDLE");
   motorIzq.establecerSetpoint(0);
   motorDer.establecerSetpoint(0);
-  vTaskDelay(pdMS_TO_TICKS(3000));
-  //vTaskSuspend( xHandleDelta );
-  //vTaskSuspend( xHandleServos );
+  vTaskDelay(pdMS_TO_TICKS(1000));
   digitalWrite(Pinout::TiraLED::LEDs, HIGH);
+  
   //Laser_01.on();
+  //vTaskDelay(pdMS_TO_TICKS(2000));
+  //Laser_01.off();
   if (motorIzq.pidEstaActivo()) {
       motorIzq.activarPID(false);
       motorDer.activarPID(false);
@@ -346,6 +347,13 @@ void onEnterMovingToWeed() {
   motorDer.establecerSetpoint(0);
 }
 
+void onEnterRowChange() {
+  //Serial.println("Entrando en MOVING_TO_WEED");
+  //vTaskResume( xHandleDelta );
+  //vTaskResume( xHandleServos );
+  setTargetYaw(180);
+}
+
 // FSM principal
 void TaskFSM(void *pvParameters) {
   (void) pvParameters;
@@ -380,6 +388,7 @@ void TaskFSM(void *pvParameters) {
                 if (receivedEvent == EVENT_STOP) newState = IDLE;
                 else if (receivedEvent == EVENT_OBSTACLE) newState = OBSTACLE;
                 else if (receivedEvent == EVENT_WEED_FOUND) newState = MOVING_TO_WEED;
+                else if (receivedEvent == EVENT_IR_SIGNAL_DETECTED) newState = ROW_CHANGE;
                 else if (receivedEvent == EVENT_RAKE_WEED_FOUND) {
                   // Solo iniciamos la acción si no está ya en progreso.
                   if (!g_isRaking) {
@@ -414,7 +423,9 @@ void TaskFSM(void *pvParameters) {
             case ERROR_STATE:
                 if (receivedEvent == EVENT_RESUME) newState = IDLE;
                 break;
-              
+            case ROW_CHANGE:
+                if (receivedEvent == EVENT_ROW_CHANGED) newState = NAVIGATING;
+                break;
           }
         }
 
@@ -430,6 +441,7 @@ void TaskFSM(void *pvParameters) {
               case LASERING: onEnterLasering(); break;
               case RETURNING_HOME: onEnterReturningHome(); break;
               case MOVING_TO_WEED: onEnterMovingToWeed(); break;
+              case ROW_CHANGE: onEnterRowChange(); break;
           }
       }
     }
@@ -461,13 +473,14 @@ void TaskFSM(void *pvParameters) {
 void TaskServoControl(void *pvParameters) {
   (void) pvParameters;
   delta_init();
-  vTaskDelay(pdMS_TO_TICKS(1000)); 
+  SERV_04.begin();
+  vTaskDelay(pdMS_TO_TICKS(1000));
 
   for (;;) {
     SERV_01.update();
     SERV_02.update();
     SERV_03.update();
-    //SERV_04.update();
+    SERV_04.update();
     vTaskDelay(pdMS_TO_TICKS(25)); 
   }
 }
@@ -478,7 +491,7 @@ void TaskLocomotion(void *pvParameters) {
   const TickType_t xFrequency = pdMS_TO_TICKS(20);
 
   for (;;) {
-    if (getState() == NAVIGATING) {
+    if (getState() == NAVIGATING || getState() == ROW_CHANGE) {
       float currentYaw = yawSensor.getYaw();
       float targetYaw;
       float baseSpeedRPM;
@@ -503,12 +516,16 @@ void TaskLocomotion(void *pvParameters) {
       float pidCorrection = (Kp_heading * headingError) + (Ki_heading * integralError) + (Kd_heading * derivativeError);
       float leftSetpoint = baseSpeedRPM - pidCorrection;
       float rightSetpoint = baseSpeedRPM + pidCorrection;
+      if (getState() == ROW_CHANGE && headingError < 2){
+        FSMEvent e = EVENT_ROW_CHANGED;
+        xQueueSend(fsmQueue, &e, 0);
+      }
       //Serial.print(leftSetpoint);
       //Serial.print(" | ");
       //Serial.println(rightSetpoint);
       
-      //motorIzq.establecerSetpoint(leftSetpoint);
-      //motorDer.establecerSetpoint(-rightSetpoint);
+      motorIzq.establecerSetpoint(leftSetpoint);
+      motorDer.establecerSetpoint(-rightSetpoint);
     } else {
       motorIzq.establecerSetpoint(0);
       motorDer.establecerSetpoint(0);
@@ -580,12 +597,15 @@ void TaskSensors(void *pvParameters) {
   
   // Inicializar el sensor
   yawSensor.begin();
-  
+  // Configura el pin del sensor IR como entrada digital
+  pinMode(Pinout::Sensores::IR_Receptor::IR, INPUT);
+
+  // Variable para evitar enviar eventos repetidos (anti-rebote)
+  int lastIrState = HIGH;
+
   const int DELAY_MS = 20; // 100 Hz
   const TickType_t delayTicks = pdMS_TO_TICKS(DELAY_MS);
   const float DELAY_SEC = DELAY_MS / 1000.0;
-  //Serial.print("DEBUG: DELAY_SEC calculado es: ");
-  //Serial.println(DELAY_SEC, 4); 
   TickType_t lastWakeTime = xTaskGetTickCount();
   unsigned long lastPrintTime = 0;
   for (;;) {
@@ -607,6 +627,25 @@ void TaskSensors(void *pvParameters) {
       }
     }
   */
+    // --- Nueva Lógica del Sensor IR (KY-022) ---
+      int currentIrState = digitalRead(Pinout::Sensores::IR_Receptor::IR);
+
+      // El sensor KY-022 pone la salida en BAJO (LOW) al detectar.
+      // Verificamos si el estado ha cambiado de ALTO a BAJO.
+      if (currentIrState == LOW && lastIrState == HIGH) {
+          Serial.println("INFO: Señal IR detectada!");
+          
+          // Crea el evento
+          FSMEvent e = EVENT_IR_SIGNAL_DETECTED;
+          
+          // Envía el evento a la cola de la FSM
+          // El tercer parámetro '0' significa que no esperamos si la cola está llena.
+          //xQueueSend(fsmQueue, &e, 0); 
+      }
+      
+      // Actualiza el último estado del sensor IR
+      lastIrState = currentIrState;
+
     vTaskDelayUntil(&lastWakeTime, delayTicks);
   }
 }

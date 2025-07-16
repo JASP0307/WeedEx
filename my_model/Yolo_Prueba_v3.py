@@ -37,6 +37,38 @@ def crop_center(img, crop_width, crop_height):
     return img[start_y:end_y, start_x:end_x]
 # --- FIN DE LA MODIFICACIÓN 1 ---
 
+# --- INICIO DE LA MODIFICACIÓN 2: Añadir función de validación por color ---
+def validar_impacto_laser(roi, hsv_range, min_area):
+    """
+    Valida la presencia de una marca de láser amarilla en una Región de Interés (ROI).
+    - roi: La porción de la imagen donde se debe buscar la marca.
+    - hsv_range: Una tupla con los rangos (lower_bound, upper_bound) para el color en HSV.
+    - min_area: El área mínima en píxeles para que una mancha sea considerada un impacto válido.
+    Retorna: True si se encuentra un impacto válido, False en caso contrario.
+    """
+    if roi is None or roi.shape[0] == 0 or roi.shape[1] == 0:
+        return False
+
+    # Convertir la ROI al espacio de color HSV
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    
+    # Crear una máscara con los píxeles que están en el rango de color
+    lower_bound, upper_bound = hsv_range
+    mask = cv2.inRange(hsv, lower_bound, upper_bound)
+    
+    # Encontrar contornos en la máscara
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    # Verificar si algún contorno supera el área mínima
+    for cnt in contours:
+        if cv2.contourArea(cnt) > min_area:
+            # ¡Impacto detectado!
+            return True
+            
+    # No se encontró ningún impacto válido
+    return False
+# --- FIN DE LA MODIFICACIÓN 2 ---
+
 # (El código de argparse se mantiene igual)
 parser = argparse.ArgumentParser()
 parser.add_argument('--model', help='Path to YOLO model file (example: "runs/detect/train/weights/best.pt")',
@@ -65,7 +97,7 @@ record = args.record
 # ######################################################
 # ## CONFIGURACIÓN DEL ROBOT Y GRID ##
 # ######################################################
-SERIAL_PORT = 'COM4'
+SERIAL_PORT = 'COM3'
 BAUD_RATE = 115200
 TARGET_CLASS = 'Rude'
 SERIAL_TIMEOUT = 10
@@ -75,6 +107,14 @@ GRID_ROWS_CM = 2
 GRID_COLS_CM = 10
 LOG_FILE = 'log_ataques.json'
 
+# --- NUEVO: PARÁMETROS DE VALIDACIÓN POR COLOR ---
+# ⚠️ ¡IMPORTANTE! Debes ajustar estos valores para tu cámara y papel.
+RANGO_AMARILLO_HSV = (
+    np.array([112, 87, 186]),  # Límite inferior (H, S, V)
+    np.array([128, 122, 206])   # Límite superior (H, S, V)
+)
+
+MIN_AREA_IMPACTO = 50  # Área mínima en píxeles para que la mancha sea válida.
 
 def resetear_log():
     """Borra el archivo de log y limpia el diccionario en memoria."""
@@ -98,7 +138,8 @@ def cargar_log_ataques(archivo_log):
     try:
         with open(archivo_log, 'r') as f:
             log = json.load(f)
-            return {int(k): v for k, v in log.items()}
+            # Asegura compatibilidad con logs antiguos
+            return {int(k): v if isinstance(v, dict) else {"timestamp": v, "validado": "desconocido"} for k, v in log.items()}
     except FileNotFoundError:
         print(f"INFO: No se encontró el archivo '{archivo_log}'. Se creará uno nuevo.")
         return {}
@@ -296,9 +337,12 @@ while True:
     if resize:
         frame = cv2.resize(frame, (resW, resH))
 
-    frame = crop_center(frame, 1080, 480)
+    frame = crop_center(frame, 1280, 480)
 
-    results = model(frame, imgsz=256, verbose=False)
+    # Creamos una copia del frame para no dibujar sobre el original que se enviará a YOLO
+    display_frame = frame.copy()
+
+    results = model(frame, imgsz=512, verbose=False)
     detections = results[0].boxes
     object_count = 0
 
@@ -306,25 +350,20 @@ while True:
     # ## DIBUJAR EL GRID EN LA IMAGEN ##
     # ######################################################
 
-    ## NUEVO ##: Calcular el origen X para centrar el grid en el frame actual.
-    # frame.shape[1] es el ancho del frame.
-    frame_width = frame.shape[1]
+    frame_width = display_frame.shape[1]
     ORIGEN_X = (frame_width - int(GRID_WIDTH_PX)) // 2
 
-    # Dibuja el borde exterior del grid
     pt1 = (ORIGEN_X, ORIGEN_Y)
     pt2 = (int(ORIGEN_X + GRID_WIDTH_PX), int(ORIGEN_Y + GRID_HEIGHT_PX))
-    cv2.rectangle(frame, pt1, pt2, (0, 255, 0), 2)
+    cv2.rectangle(display_frame, pt1, pt2, (0, 255, 0), 2)
 
-    # Dibuja las líneas internas
     for row in range(1, GRID_ROWS_CM):
         y = int(ORIGEN_Y + row * CELL_HEIGHT_PX)
-        cv2.line(frame, (ORIGEN_X, y), (int(ORIGEN_X + GRID_WIDTH_PX), y), (0, 255, 0), 1)
+        cv2.line(display_frame, (ORIGEN_X, y), (int(ORIGEN_X + GRID_WIDTH_PX), y), (0, 255, 0), 1)
     for col in range(1, GRID_COLS_CM):
         x = int(ORIGEN_X + col * CELL_WIDTH_PX)
-        cv2.line(frame, (x, ORIGEN_Y), (x, int(ORIGEN_Y + GRID_HEIGHT_PX)), (0, 255, 0), 1)
+        cv2.line(display_frame, (x, ORIGEN_Y), (x, int(ORIGEN_Y + GRID_HEIGHT_PX)), (0, 255, 0), 1)
 
-    # (El resto del bucle de detección y procesamiento se mantiene igual)
     for i in range(len(detections)):
         xyxy_tensor = detections[i].xyxy.cpu()
         xyxy = xyxy_tensor.numpy().squeeze()
@@ -333,7 +372,7 @@ while True:
         centerX = int((xmin + xmax) / 2)
         centerY = int((ymin + ymax) / 2)
 
-        cv2.circle(frame, (centerX, centerY), 5, (0, 0, 255), -1)
+        cv2.circle(display_frame, (centerX, centerY), 5, (0, 0, 255), -1)
 
         classidx = int(detections[i].cls.item())
         classname = labels[classidx]
@@ -342,12 +381,12 @@ while True:
         if conf > min_thresh:
             object_count += 1
             color = bbox_colors[classidx % 10]
-            cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), color, 2)
+            cv2.rectangle(display_frame, (xmin, ymin), (xmax, ymax), color, 2)
             label = f'{classname}: {int(conf*100)}%'
             labelSize, baseLine = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
             label_ymin = max(ymin, labelSize[1] + 10)
-            cv2.rectangle(frame, (xmin, label_ymin - labelSize[1] - 10), (xmin + labelSize[0], label_ymin + baseLine - 10), color, cv2.FILLED)
-            cv2.putText(frame, label, (xmin, label_ymin - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+            cv2.rectangle(display_frame, (xmin, label_ymin - labelSize[1] - 10), (xmin + labelSize[0], label_ymin + baseLine - 10), color, cv2.FILLED)
+            cv2.putText(display_frame, label, (xmin, label_ymin - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
 
             if classname == TARGET_CLASS and arduino is not None:
                 is_inside_grid = (ORIGEN_X <= centerX < ORIGEN_X + GRID_WIDTH_PX) and \
@@ -365,30 +404,84 @@ while True:
                         command = f"ATTACK,{grid_position}\n"
                         arduino.write(command.encode('utf-8'))
                         print(f"¡{TARGET_CLASS} en celda {grid_position}! Enviando comando...")
-                        cv2.putText(frame, f"ATTACK: {grid_position}", (centerX, centerY - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                        cv2.putText(display_frame, f"ATTACK: {grid_position}", (centerX, centerY - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
                         print("⏳ Esperando confirmación del Arduino...")
-                        overlay = frame.copy()
-                        frame_h, frame_w, _ = frame.shape
+                        overlay = display_frame.copy()
+                        frame_h, frame_w, _ = display_frame.shape
                         cv2.putText(overlay, "ATACANDO...", (frame_w // 2 - 100, frame_h // 2), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 3)
                         cv2.imshow('YOLO detection results', overlay)
                         cv2.waitKey(1)
 
-                        while True:
-                            response = arduino.readline().decode('utf-8').strip()
-                            if response == "DONE":
-                                print("Confirmación recibida. Guardando en el log permanente.")
-                                posiciones_atacadas_log[grid_position] = time.strftime("%Y-%m-%d %H:%M:%S")
+                        start_time_wait = time.time()
+                        confirmation_received = False
+                        while time.time() - start_time_wait < SERIAL_TIMEOUT:
+                            if arduino.in_waiting > 0:
+                                response = arduino.readline().decode('utf-8').strip()
+                                if response == "DONE":
+                                    confirmation_received = True
+                                    print("✅ Confirmación de ataque recibido.")
+                                    break
+                        
+                        if confirmation_received:
+                            # --- INICIO DE LA MODIFICACIÓN 3: Lógica de validación ---
+                            print("🔍 Realizando validación visual del impacto...")
+                            
+                            # Aquí se asume que la cámara de validación es la misma y el robot ha avanzado.
+                            # Para una simulación simple, capturamos un nuevo frame.
+                            # En un sistema real, podrías activar una segunda cámara aquí.
+                            ret_val, validation_frame = cap.read()
+                            if ret_val:
+                                validation_frame = crop_center(validation_frame, 1280, 480)
+                                
+                                # Definir la Región de Interés (ROI) para la validación
+                                # Es el área de la celda que acabamos de atacar
+                                roi_x = int(ORIGEN_X + grid_col * CELL_WIDTH_PX)
+                                roi_y = int(ORIGEN_Y + grid_row * CELL_HEIGHT_PX)
+                                roi_w = int(CELL_WIDTH_PX)
+                                roi_h = int(CELL_HEIGHT_PX)
+                                
+                                # Extraer la ROI del frame de validación
+                                roi_validation = validation_frame[roi_y : roi_y + roi_h, roi_x : roi_x + roi_w]
+                                
+                                # Dibujar la ROI en el frame que se muestra
+                                cv2.rectangle(display_frame, (roi_x, roi_y), (roi_x + roi_w, roi_y + roi_h), (255, 0, 255), 2) # Color magenta para la ROI
+                                
+                                impacto_validado = validar_impacto_laser(roi_validation, RANGO_AMARILLO_HSV, MIN_AREA_IMPACTO)
+                                
+                                if impacto_validado:
+                                    print("👍 IMPACTO CONFIRMADO")
+                                    cv2.putText(display_frame, "IMPACTO CONFIRMADO", (roi_x, roi_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                                else:
+                                    print("👎 FALLO DE IMPACTO")
+                                    cv2.putText(display_frame, "FALLO DE IMPACTO", (roi_x, roi_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                                
+                                # Guardar en el log permanente con el estado de validación
+                                posiciones_atacadas_log[grid_position] = {
+                                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                                    "validado": impacto_validado
+                                }
                                 guardar_log_ataques(LOG_FILE, posiciones_atacadas_log)
-                                break
+
+                            else:
+                                print("⚠️ No se pudo capturar frame para validación.")
+                            # --- FIN DE LA MODIFICACIÓN 3 ---
+                        else:
+                            print(f"❌ No se recibió confirmación 'DONE' del Arduino para la celda {grid_position} en {SERIAL_TIMEOUT} segundos.")
+
 
     # (El resto del código para mostrar/guardar el frame y limpiar se mantiene igual)
     if source_type in ['video', 'usb', 'picamera']:
-        cv2.putText(frame, f'FPS: {avg_frame_rate:0.2f}', (10, 20), cv2.FONT_HERSHEY_SIMPLEX, .7, (0, 255, 255), 2)
+        cv2.putText(display_frame, f'FPS: {avg_frame_rate:0.2f}', (10, 20), cv2.FONT_HERSHEY_SIMPLEX, .7, (0, 255, 255), 2)
 
-    cv2.putText(frame, f'Number of objects: {object_count}', (10, 40), cv2.FONT_HERSHEY_SIMPLEX, .7, (0, 255, 255), 2)
-    cv2.imshow('YOLO detection results', frame)
-    if record: recorder.write(frame)
+    cv2.putText(display_frame, f'Number of objects: {object_count}', (10, 40), cv2.FONT_HERSHEY_SIMPLEX, .7, (0, 255, 255), 2)
+    
+    # --- NUEVO: Actualizar el frame para el servidor de streaming ---
+    with lock:
+        output_frame = display_frame.copy()
+        
+    cv2.imshow('YOLO detection results', display_frame)
+    if record: recorder.write(display_frame)
 
     target_frame_duration = 1 / TARGET_FPS
     elapsed_time = time.perf_counter() - t_start
@@ -407,7 +500,7 @@ while True:
     elif key == ord('s') or key == ord('S'):
         cv2.waitKey()
     elif key == ord('p') or key == ord('P'):
-        cv2.imwrite('capture.png',frame)
+        cv2.imwrite('capture.png',display_frame)
 
     if len(frame_rate_buffer) >= fps_avg_len:
         frame_rate_buffer.pop(0)

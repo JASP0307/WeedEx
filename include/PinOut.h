@@ -94,5 +94,10 @@ namespace Pinout {
         namespace Battery {
             constexpr uint8_t Battery = A0;
         }
+
+        namespace IR_Receptor {
+            constexpr uint8_t IR = 40;
+        }
+
     }
 } // Fin del namespace Pinout

@@ -4,37 +4,22 @@
 #include <Arduino.h>
 #include <Servo.h>
 
-// --- Declaración de la Clase ServoModule ---
-// Contiene las firmas de las funciones y las variables miembro.
-
 class ServoModule {
 public:
-  // Constructor: Se ejecuta al crear un objeto ServoModule.
-  ServoModule(uint8_t pin);
-
-  // Inicializa y adjunta el servo al pin especificado.
-  // Se puede proporcionar un ángulo inicial, por defecto es 170.
-  void begin(int initialAngle = 170);
-
-  // Establece el ángulo objetivo al que se moverá el servo.
-  void setTarget(int angle);
-
-  // Actualiza la posición del servo, moviéndolo un paso hacia el objetivo.
-  // Devuelve 'true' si el servo todavía está en movimiento.
-  // Debe ser llamado repetidamente desde una tarea RTOS.
-  bool update();
-
-  // Devuelve la posición angular actual del servo.
-  int getCurrentAngle();
+    // --- Miembros Públicos ---
+    ServoModule(uint8_t pin);            // Constructor
+    void begin(int initialAngle = 170);   // Inicializador del servo
+    void setTarget(int angle);           // Establece el ángulo objetivo
+    bool update();                       // Actualiza la posición del servo (debe llamarse en loop)
+    int getCurrentAngle();               // Devuelve el ángulo actual
 
 private:
-  Servo _servo;           // La instancia del objeto de la librería Servo.
-  uint8_t _pin;           // El pin al que está conectado el servo.
-  
-  // 'volatile' es importante en un entorno RTOS, ya que estas variables
-  // pueden ser modificadas por una tarea y leídas por otra.
-  volatile int _targetAngle;  // Posición a la que queremos que se mueva.
-  volatile int _currentAngle; // Posición actual registrada del servo.
+    // --- Miembros Privados ---
+    Servo _servo;        // La instancia del objeto Servo
+    uint8_t _pin;        // El pin al que está conectado el servo
+    int _currentAngle;   // El ángulo actual del servo
+    int _targetAngle;    // El ángulo al que queremos que se mueva el servo
+    bool _isAttached;    //
 };
 
 #endif // SERVOMODULE_H
